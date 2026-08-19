@@ -1,10 +1,5 @@
-import Agent from "./agent.ts"
-import {RealLlmClient} from "./real-llm.ts";
-import {ReadFileTool} from "./read-file-tool.ts";
+import { RealLlmClient } from "./real-llm.ts";
 
-const agent = new Agent(
-    new RealLlmClient(),
-    [new ReadFileTool()],
-);
+const llm = new RealLlmClient();
 
-await agent.prompt("读取不存在的文件 not-exists.md，并根据结果回答。");
+await llm.streamText("用10句话解释什么是 Agent Loop。");
