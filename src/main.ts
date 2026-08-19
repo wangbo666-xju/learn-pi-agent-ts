@@ -7,4 +7,4 @@ const agent = new Agent(
     [new ReadFileTool()],
 );
 
-await agent.prompt("读取 README.md，并用一句话总结它的内容。");
+await agent.prompt("读取不存在的文件 not-exists.md，并根据结果回答。");

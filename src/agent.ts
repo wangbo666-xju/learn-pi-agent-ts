@@ -41,7 +41,15 @@ class Agent {
                     continue;
                 }
 
-                const result = await tool.execute(toolCall.arguments)
+                let result: string;
+
+                try {
+                    result = await tool.execute(toolCall.arguments);
+
+                } catch (error) {
+                    const msg = error instanceof Error ? error.message : String(error);
+                    result = `工具执行失败: ${msg}`;
+                }
 
                 messages.push({
                     role: "toolResult",
