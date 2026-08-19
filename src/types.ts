@@ -1,9 +1,9 @@
+export type ToolArguments = Record<string, unknown>;
+
 export type ToolCall = {
     id: string;
     name: string;
-    arguments: {
-        path: string;
-    };
+    arguments: ToolArguments;
 };
 
 export type UserMessage = {
@@ -26,10 +26,13 @@ export type ToolResultMessage = {
 export type AgentMessage = UserMessage | AssistantMessage | ToolResultMessage;
 
 export interface LlmClient {
-    chat(messages: AgentMessage[]): Promise<AssistantMessage>;
+    chat(messages: AgentMessage[], tools: Tool[]): Promise<AssistantMessage>;
 }
 
 export interface Tool {
     name: string;
-    execute(args: { path: string }): Promise<string>;
+    description: string;
+    parameters: Record<string, unknown>;
+
+    execute(args: ToolArguments): Promise<string>;
 }

@@ -21,7 +21,7 @@ class Agent {
         });
 
         while (true) {
-            const reply = await this.llm.chat(messages);
+            const reply = await this.llm.chat(messages, this.tools);
             messages.push(reply);
 
             if (!reply.toolCalls?.length) {

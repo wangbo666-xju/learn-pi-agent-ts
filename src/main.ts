@@ -7,4 +7,4 @@ const agent = new Agent(
     [new ReadFileTool()],
 );
 
-await agent.prompt("请只回复：真实模型连接成功");
+await agent.prompt("读取 README.md，并用一句话总结它的内容。");

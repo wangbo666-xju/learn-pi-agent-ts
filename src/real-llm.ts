@@ -1,15 +1,37 @@
-import type { AgentMessage, AssistantMessage, LlmClient } from "./types.ts";
+import type {AgentMessage, AssistantMessage, LlmClient, Tool, ToolArguments} from "./types.ts";
+
+
+type ApiToolCall = {
+    id: string;
+    type: "function";
+    function: {
+        name: string;
+        arguments: string;
+    };
+
+}
+
 
 type ChatCompletionResponse = {
     choices: Array<{
         message: {
             content: string | null;
+            tool_calls?: ApiToolCall[];
         };
     }>;
 };
 
+function parseToolArguments(text: string): ToolArguments {
+    const value: unknown = JSON.parse(text);
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+        throw new Error("模型返回的工具参数不是对象");
+    }
+    return value as ToolArguments;
+
+}
+
 export class RealLlmClient implements LlmClient {
-    async chat(messages: AgentMessage[]): Promise<AssistantMessage> {
+    async chat(messages: AgentMessage[], tools: Tool[]): Promise<AssistantMessage> {
         const apiKey = process.env.OPENAI_API_KEY;
         const baseUrl = process.env.OPENAI_BASE_URL;
         const model = process.env.OPENAI_MODEL;
@@ -18,13 +40,39 @@ export class RealLlmClient implements LlmClient {
             throw new Error("缺少 OPENAI_API_KEY、OPENAI_BASE_URL 或 OPENAI_MODEL");
         }
 
-        // 当前阶段只验证普通对话；下一步才把 toolCall / toolResult 转为 API 工具协议。
-        const apiMessages = messages
-            .filter((message) => message.role !== "toolResult")
-            .map((message) => ({
+        const apiMessages = messages.map((message) => {
+            if (message.role === "toolResult") {
+                return {
+                    role: "tool",
+                    tool_call_id: message.toolCallId,
+                    content: message.content,
+                }
+            }
+
+            if (message.role === "assistant" && message.toolCalls?.length) {
+                return {
+                    role: "assistant",
+                    content: message.content || null,
+                    tool_calls: message.toolCalls.map((toolCall => ({
+                        id: toolCall.id,
+                        type: "function",
+                        function: {
+                            name: toolCall.name,
+                            arguments: JSON.stringify(toolCall.arguments),
+
+                        }
+
+                    })))
+                }
+            }
+
+            return {
                 role: message.role,
-                content: message.content,
-            }));
+                content: message.content
+            }
+
+        })
+
 
         const response = await fetch(`${baseUrl}/chat/completions`, {
             method: "POST",
@@ -35,6 +83,15 @@ export class RealLlmClient implements LlmClient {
             body: JSON.stringify({
                 model,
                 messages: apiMessages,
+                tools: tools.map((tool) => ({
+                    type: "function",
+                    function: {
+                        name: tool.name,
+                        description: tool.description,
+                        parameters: tool.parameters,
+                    },
+                })),
+                tool_choice: "auto",
             }),
         });
 
@@ -43,10 +100,18 @@ export class RealLlmClient implements LlmClient {
         }
 
         const data = (await response.json()) as ChatCompletionResponse;
-
+        const message = data.choices[0]?.message;
+        if (!message) {
+            throw new Error("模型没有返回 message");
+        }
         return {
             role: "assistant",
-            content: data.choices[0]?.message.content ?? "",
+            content: message.content ?? "",
+            toolCalls: message.tool_calls?.map((toolCall) => ({
+                id: toolCall.id,
+                name: toolCall.function.name,
+                arguments: parseToolArguments(toolCall.function.arguments)
+            }))
         };
     }
 }
