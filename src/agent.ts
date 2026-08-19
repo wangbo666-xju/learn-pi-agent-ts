@@ -1,5 +1,4 @@
-import {AgentMessage, LlmClient, Tool} from "./types.ts";
-import * as repl from "node:repl";
+import type {AgentMessage, LlmClient, Tool} from "./types.ts";
 
 class Agent {
 
@@ -21,11 +20,13 @@ class Agent {
         });
 
         while (true) {
-            const reply = await this.llm.chat(messages, this.tools);
+            const reply = await this.llm.chatStream(messages, this.tools, (text) => process.stdout.write(text));
             messages.push(reply);
 
             if (!reply.toolCalls?.length) {
-                console.log(reply.content);
+                if (reply.content) {
+                    process.stdout.write("\n");   // 文本已经实时打过了，这里只补个换行
+                }
                 return messages;
             }
 
@@ -59,6 +60,7 @@ class Agent {
 
             }
 
+            process.stdout.write("\n");
 
         }
 

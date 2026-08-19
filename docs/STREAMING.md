@@ -1,253 +1,224 @@
-# streamText 流式传输研究笔记
+# 流式传输设计笔记（streamText → chatStream）
 
-> 研究对象：`../src/real-llm.ts` 中的 `streamText()` 方法（第 128–201 行）。
-> 本文从 **网络层（数据怎么传）** 和 **程序层（代码怎么读）** 两个视角，总结流式传输的完整机制。
+> 本文件完整记录流式功能的设计思路与实现，覆盖 `src/real-llm.ts` 的
+> `readSseChunks()` 共享核心，以及 `chat()`、`chatStream()`、`streamText()` 三个使用方，
+> 并说明它们如何接入 `Agent.prompt()` 循环。
+> 定位：把"为什么这么设计"讲清楚，而不只是逐行解释语法。
 
 ---
 
-## 1. 一句话总览
+## 1. 设计目标：我们要解决什么问题
 
-`streamText` 做的事情是：**发起一次"流式" HTTP 请求，然后像读水管一样，把服务器边生成边吐出来的文字增量，一点一点实时打印到终端**，而不是像 `chat()` 那样憋一整段 JSON、等回复完整后才一次性返回。
+改造前，Agent 的交互模式是"**等完整回复，一次性打印**"：
 
 ```text
-用户输入 → fetch(stream: true) → 服务器边生成边推送
-        → 客户端逐块拉取字节 → 还原成文字增量 → 实时打印到终端
+await llm.chat(messages, tools)      // 模型全部生成完才返回一个 JSON
+console.log(reply.content)           // 然后整段一次性打印
+```
+
+缺点：用户在模型生成的那几秒里**什么都看不到**，只能干等；对工具调用这种"中间有停顿"的场景尤其难受。
+
+设计目标：把交互改成"**模型说一个字，终端出一个字**"，同时**不破坏**已有的工具调用链路。
+
+```text
+[user]
+→ [user, assistant(文本实时上屏, toolCall: read)]     ← 第一轮边生成边显示
+→ [user, assistant, toolResult]                       ← 执行 read 工具
+→ [user, assistant, toolResult, assistant(final)]     ← 第二轮同样边生成边显示
 ```
 
 ---
 
-## 2. 整体结构
+## 2. 总体设计：一个核心 + 三个使用方
 
-代码只干三件事，对应三个层次：
+流式解析本身和"拿到数据后怎么用"是两件事，所以拆成一层共享核心 + 三个使用方：
 
-| 层 | 关键代码 | 职责 |
+```text
+                      readSseChunks(response, onChunk)
+                     （只负责：字节 → SSE 帧 → 逐帧回调）
+                          │  onChunk(帧JSON)
+        ┌─────────────────┼──────────────────┐
+        │                 │                  │
+   chatStream()      streamText()        chat()
+   （Agent 主路径）   （独立演示）       （非流式对照）
+```
+
+| 角色 | 代码 | 设计动机 |
 |---|---|---|
-| ① 发起流式请求 | `fetch(..., stream: true)` | 告诉服务器"生成一点发一点，别攒着" |
-| ② 按网络块拉取字节 | `response.body.getReader()` + `reader.read()` | 底层水管是字节流，一块一块拿 |
-| ③ 拆成 SSE 事件取增量 | buffer 缓冲 + 按行解析 + `delta.content` | 把字节还原成模型吐出的文字增量，立即输出 |
+| 共享核心 | `readSseChunks()` | "读流"的复杂逻辑只写一遍，三个使用方通过回调消费 |
+| 使用方 A | `chatStream(messages, tools, onText)` | Agent 主路径：拼接文本 + 工具调用，返回完整 `AssistantMessage` |
+| 使用方 B | `streamText(prompt)` | 独立演示：只把文本打终端，不关心工具调用 |
+| 使用方 C | `chat(messages, tools)` | 非流式对照：一次性 JSON |
+
+**核心取舍**：为什么不用一个函数 + 参数开关，而是拆三个？因为三个使用方的"返回约定"不同——`chat`/`chatStream` 要返回结构化 `AssistantMessage`，`streamText` 只负责打印（返回 `void`）。共用请求构造，但消费方式不同。
 
 ---
 
-## 3. 网络层：数据是怎么"流"起来的
+## 3. 网络层的"三层块"模型（读流最难的点）
 
-### 3.1 普通请求 vs 流式请求
-
-- **普通 `chat()`**：POST 发出去，服务器等全部内容生成完，一次性返回完整 JSON（"点菜等上齐"）。
-- **流式请求**：唯一的开关是 body 里的 `stream: true`。服务器收到后不走"等全部生成完"的路，而是**一边生成一边往 HTTP 响应里写**（"水管直接接灶台"）。
-
-这也是为什么代码里必须检查 `response.body`（第 159 行）：
-
-```ts
-if (!response.body) throw new Error("模型响应没有流内容");
-```
-
-非流式响应可以没有 body（一次 JSON 全给了）；**流式响应必须靠 body 一点一点传**，所以必须检查。
-
-### 3.2 底层传输：HTTP 分块传输编码（chunked transfer-encoding）
-
-服务器无法预先告诉客户端"响应总共多少字节"（因为还没生成完），所以 HTTP 层使用：
+流式传输的本质是：服务器把"一次完整回复"拆成"一长串增量"，经过三层不同粒度的"块"传回客户端。必须层层还原：
 
 ```text
-Transfer-Encoding: chunked
+网络层块（HTTP chunked，几 KB 字节，与内容无关）
+   ↓ TextDecoder.decode(value, {stream: !done})
+字符串片段（可能含 0~n 个换行符）
+   ↓ buffer + split("\n")    再分帧
+SSE 事件行（data: {...}，一帧 = 一次模型增量）
+   ↓ JSON.parse + delta.content / delta.tool_calls
+文字增量 / 工具参数碎片
+   ↓ onText 回调 或 累加拼接
+终端实时输出 / 完整 AssistantMessage
 ```
 
-响应按"块"发送，每块前面标注长度，发完为止。这是**第一层分块：网络层的块**。
+三个关键认知：
 
-### 3.3 数据格式：SSE（Server-Sent Events）
+1. **`stream: true` 是唯一开关**（`chatStream` 请求体）：服务器行为由它决定，其余代码全是"读流"的机械活。
+2. **`await fetch()` 不等 body**：拿到 `response` 时模型可能才刚吐出第一个字——这是流式成立的前提。
+3. **网络块与 SSE 行不对齐**：一块字节里可能装好几行、也可能只装一行的前半截。所以必须有 `buffer` 缓存半行，等下一块补齐。
 
-在 chunked 之上，内容按 SSE 协议组织，格式极简：
-
-- 每个事件一行，格式：`data: <json>`
-- 空行分隔事件
-- 流以 `data: [DONE]` 收尾
-
-DeepSeek 实际返回的流（OpenAI 兼容格式）长这样：
-
-```text
-data: {"id":"chatcmpl-xxx","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}
-
-data: {"id":"chatcmpl-xxx","choices":[{"index":0,"delta":{"content":"用"},"finish_reason":null}]}
-
-data: {"id":"chatcmpl-xxx","choices":[{"index":0,"delta":{"content":"10"},"finish_reason":null}]}
-
-data: {"id":"chatcmpl-xxx","choices":[{"index":0,"delta":{"content":"句话"},"finish_reason":null}]}
-   ...（很多帧，每帧只有一点点）
-data: {"id":"chatcmpl-xxx","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
-
-data: [DONE]
-```
-
-**关键概念：`delta.content` 是"增量"而不是"累计"**——每帧只包含新吐出来的那一点点（可能就一个字）。客户端把各帧的 `delta` 逐个拼起来，才是完整回复。这就是**第二层分块：SSE 事件层**，按换行符 `\n` 分隔。
-
-### 3.4 客户端如何"读水管"
-
-Node 的 `fetch` 返回的 `response.body` 是一个 `ReadableStream`（异步迭代的字节管道）：
-
-```ts
-const reader = response.body.getReader();    // 拿一个"拉取器"
-const {value, done} = await reader.read();   // 每次 read() 异步等一块字节
-```
-
-- `value`：一块 `Uint8Array`（字节数组，大小不定）
-- `done`：水管是否关闭
-
-**核心难点**：网络层的一块与 SSE 的一行**没有任何对齐关系**——一块里可能装了好几行，也可能只装了一行的前半截。这是整个程序最绕的地方，也是 buffer 存在的理由。
-
----
-
-## 4. 程序层：代码逐段拆解
-
-### 4.1 入口与环境变量检查（L128–135）
-
-```ts
-async streamText(prompt: string): Promise<void> {
-    const apiKey = process.env.OPENAI_API_KEY;
-    const baseUrl = process.env.OPENAI_BASE_URL;
-    const model = process.env.OPENAI_MODEL;
-    if (!apiKey || !baseUrl || !model) throw new Error("缺少模型配置");
-```
-
-- 返回 `Promise<void>`：函数**不返回值**，文字直接写到终端（stdout），调用方拿不到结果。
-- 三个环境变量缺一不可，防呆检查。
-
-### 4.2 发起流式请求（L137–153）
-
-```ts
-const response = await fetch(`${baseUrl}/chat/completions`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-        model,
-        stream: true,          // ← 灵魂所在：声明要流式
-        messages: [{ role: "user", content: prompt }],
-    }),
-});
-```
-
-- 相比 `chat()`，多了 `stream: true`，且**不带 `tools`**——目前只是"裸文本流"，不参与工具调用。
-- 重要细节：`await fetch()` **只等到响应头到达就返回**，不会等整个 body 传完。拿到 `response` 时，服务器可能才刚吐出第一个字——这是流式成立的前提。
-
-### 4.3 拿到字节流读取器（L155–164）
-
-```ts
-if (!response.ok) throw ...
-if (!response.body) throw new Error("模型响应没有流内容");
-
-const reader = response.body.getReader();   // 字节管道的拉取器
-const decoder = new TextDecoder();          // 字节 → 字符串 的翻译器
-let buffer = "";                            // 半行残料的临时存放处
-```
-
-`reader.read()` 给的是**字节**，而我们要处理的是**字符串**，所以需要 `TextDecoder` 做翻译。
-
-### 4.4 主循环：拉块 → 拼字符串 → 切行（L168–174）
+`readSseChunks()`（`real-llm.ts` 底部）的核心循环：
 
 ```ts
 while (true) {
-    const {value, done} = await reader.read();          // ① 异步等一块字节
-
-    buffer += decoder.decode(value, {stream: !done});   // ② 字节转字符串，追加到 buffer
-
-    const lines = buffer.split("\n");                   // ③ 按换行切
-    buffer = lines.pop() ?? "";                         // ④ 最后一段不一定是完整行，留到下次
-```
-
-这是全函数最核心的 4 行：
-
-- **①** `await reader.read()`：挂起，等网络送来下一块字节。水管没数据时就等着，有数据才继续——**这是"流"的驱动力**。
-- **②** `decoder.decode(value, {stream: !done})`：
-  - 把字节翻译成字符串，**追加**到 `buffer`（不是覆盖，因为上一轮可能留了半行）。
-  - `stream: !done` 告诉解码器"后面可能还有数据"。这样遇到**多字节字符被网络块从中间劈开**的情况（如中文"句"是 3 个 UTF-8 字节，可能第 2 字节在这块、第 3 字节在下一块），解码器会先把半截字符**缓存在自己内部**，等下一块字节到了再拼好。没有这个参数就会解出乱码（`�`）。
-- **③** 按 `\n` 切行：换行符正是 SSE 的事件分隔符。
-- **④** `lines.pop()`：**最后一段不一定是完整的一行**——网络块可能在行中间戛然而止。所以把最后一段放回 buffer 存着，等下一块字节来了接着拼。
-
-> 一轮循环里可能拿到 0 个完整行（全是半截），也可能拿到几十个完整行——取决于网络块怎么切。
-
-### 4.5 逐行解析 SSE 事件（L176–194）
-
-```ts
-for (const rawLine of lines) {
-    const line = rawLine.trim();
-    if (!line.startsWith("data:")) continue;    // 跳过空行和注释行
-
-    const payload = line.slice(5).trim();       // 去掉 "data:" 前缀
-
-    if (payload === "[DONE]") return;           // SSE 结束哨兵 → 直接收工
-
-    const chunk = JSON.parse(payload) as StreamChunk;   // 每帧是一个 JSON
-    const text = chunk.choices[0]?.delta.content;       // 取增量文本
-
-    if (text) process.stdout.write(text);       // 立即打印，不换行
+    const {value, done} = await reader.read();           // ① 异步等一块字节
+    buffer += decoder.decode(value, {stream: !done});    // ② 字节→字符串，追加（防多字节乱码）
+    const lines = buffer.split("\n");                    // ③ 按换行切
+    buffer = lines.pop() ?? "";                          // ④ 最后一段可能是半行，留到下次
+    for (const rawLine of lines) {
+        const line = rawLine.trim();
+        if (!line.startsWith("data:")) continue;         // 跳过空行/注释
+        const payload = line.slice(5).trim();
+        if (payload === "[DONE]") return;                // 协议层结束哨兵
+        onChunk(JSON.parse(payload) as StreamChunk);     // 一帧 JSON 交给使用方
+    }
+    if (done) return;                                    // 传输层兜底退出
 }
 ```
 
-- `if (!line.startsWith("data:")) continue`：SSE 协议中 `:` 开头的行是注释、空行是事件分隔符，没有有效载荷，跳过。
-- `line.slice(5)`：砍掉 `data:` 这 5 个字符。
-- `[DONE]`：服务器说"发完了"，直接 `return` 退出整个函数。
-- 每帧只取 `choices[0].delta.content`——即增量文字。
-- `if (text)`：有的帧 `delta` 是空的（如最后一个 `finish_reason: "stop"` 帧），没有文本就不输出。
+- **①** `await reader.read()` 挂起等数据——是"流"的驱动力。
+- **②** `{stream: !done}`：中文等多字节字符可能被网络块劈成两半，靠它让解码器先缓存半截、下一块补齐。缺了会出乱码 `�`。
+- **④** `lines.pop()`：网络块可能停在行中间，最后一段不是完整行，放回 buffer。
+- **`[DONE]` 和 `done` 是双重保险**：一个来自协议层（SSE 结束标记），一个来自传输层（管道关闭）。
 
-### 4.6 兜底退出（L197–199）
+---
+
+## 4. 关键设计决策
+
+### 4.1 为什么 `chatStream` 返回与 `chat` 同构的 `AssistantMessage`
+
+这是整个集成最关键的设计：`chatStream` 流结束后组装的返回结构，和 `chat` **完全一致**（`role: "assistant"`, `content`, `toolCalls?`）。因此：
+
+> `Agent.prompt()` 的工具执行分支**一个字都不用改**——它只认 `AssistantMessage`，不关心这份回复来自流式还是非流式。
+
+这让流式成为 `LlmClient` 的"另一种实现路径"，而不是侵入 Agent 循环的新机制。
+
+### 4.2 文本增量：累加 + 实时回调
+
+`chatStream` 里同时做两件事（`readSseChunks` 的回调内）：
 
 ```ts
-if (done) return;
+if (delta.content) {
+    content += delta.content;   // 累加，流结束 = 完整文本
+    onText(delta.content);      // 实时回调，Agent 那边打印
+}
 ```
 
-如果服务器没发 `[DONE]` 就断流（超时、网络中断等），`reader.read()` 会返回 `done: true`，从这里兜底退出。
+- `content`：为返回的 `AssistantMessage.content` 服务（拼完整）。
+- `onText`：为"边说边显示"服务（实时上屏）。
 
----
+### 4.3 工具参数碎片拼接（最容易写错的地方）
 
-## 5. 三层"块"的对应关系（全函数最难理解的点）
+流式协议里，`delta.tool_calls[].function.arguments` 是**一段段 JSON 字符串碎片**，
+比如第一帧 `{"path":"Rea`，第二帧 `dme.md"}`。因此：
 
-整个函数在和**三种粒度完全不同**的"块"打交道，必须层层还原：
+- **绝不可以逐帧 `JSON.parse`**（碎片不是合法 JSON，会抛错）。
+- 必须**按 `index` 分组、字符串累加**，流结束再一次性 `parseToolArguments`。
 
-```text
-网络层块（chunked，几 KB 字节，与内容无关）
-   ↓ TextDecoder 解码
-字符串片段（可能含 0~n 个换行）
-   ↓ buffer + split("\n")
-SSE 事件行（data: {...}，一帧 = 一次模型增量）
-   ↓ JSON.parse + delta.content
-文字增量（可能就 1~2 个字）
-   ↓ process.stdout.write
-终端屏幕上实时蹦出来的字
+```ts
+// 按 index 分组累加
+const toolCallFragments = new Map<number, {id; name; argumentsText}>();
+for (const fragment of delta.tool_calls ?? []) {
+    const index = fragment.index ?? 0;
+    let acc = toolCallFragments.get(index);
+    if (!acc) { acc = {...}; toolCallFragments.set(index, acc); }
+    if (fragment.id) acc.id = fragment.id;
+    if (fragment.function?.name) acc.name = fragment.function.name;
+    if (fragment.function?.arguments) acc.argumentsText += fragment.function.arguments;  // 累加
+}
+
+// 流结束：按 index 排序，再 parse
+const toolCalls = [...toolCallFragments.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([, {id, name, argumentsText}]) => ({
+        id, name,
+        arguments: argumentsText ? parseToolArguments(argumentsText) : {},
+    }));
 ```
 
-- **网络层块** 与 **SSE 行** 不对齐 → 所以需要 `buffer` + `split` 做"再分帧"；
-- **SSE 帧** 与 **语义文字** 不对齐（一帧可能是半个词）→ 客户端从不"理解"内容，只是无脑拼接 `delta`；
-- 拼接全部 `delta` 才是完整回复，但 `streamText` 从不拼接——它**只要即时打印**，所以用 `process.stdout.write`（不换行、不缓冲）而不是 `console.log`（自带换行和缓冲）。
+设计要点：
+- 用 `Map<index, 累加器>`：`index` 是"第几个工具调用"，模型一次可能发多个工具调用，靠它区分、保证组装顺序。
+- `sort((a,b) => a[0]-b[0])` 按 index 排序，确保多个工具调用按声明顺序返回。
+
+### 4.4 `onText` 回调 vs 直接打印
+
+- `chatStream` 用 **`onText` 回调**：把"打印"这件事交给调用方（Agent）决定，`LlmClient` 不直接写终端——职责更清晰、可测试。
+- `streamText` 用 **`process.stdout.write`**：独立演示，直接打。
+- Agent 侧用 `process.stdout.write` 而不是 `console.log`：`write` 不换行、不缓冲，增量到了立刻上屏；`console.log` 自带换行会把流式效果破坏。
+
+### 4.5 共享 helper：为什么抽出来
+
+`requireConfig()`、`toApiMessages()`、`toApiTools()`、`parseToolArguments()` 从 `chat()` 里抽出，供三个方法复用，避免重复。其中：
+
+- `requireConfig()`：读环境变量 + 判空，返回 `{apiKey, baseUrl, model}`，调用处用 `const {apiKey, baseUrl, model} = requireConfig()` 解构取回。
+- `toApiMessages()` / `toApiTools()`：内部格式 → API 格式的转换（`toolResult`→`tool`、`Tool`→`{type:"function",...}`）。
 
 ---
 
-## 6. 关键设计点汇总
+## 5. Agent 循环集成
 
-1. **`stream: true` 是唯一开关**：服务器行为由它决定，其余代码全是"读流"的机械活。
-2. **`await fetch()` 不等 body**：拿到 `response` 时内容才开始来，这是流式与"等全部"的分水岭。
-3. **`{stream: !done}` 防乱码**：中文等多字节字符跨网络块时靠它兜底。
-4. **`[DONE]` 与 `done` 是双重保险**：一个来自协议层（SSE 结束哨兵），一个来自传输层（管道关闭）。
-5. **流式也可以带工具**：OpenAI 兼容协议中，工具调用的流式形式是 `delta.tool_calls`（`function.arguments` 也是一段段增量字符串）。当前 `streamText` 只处理 `delta.content`，与 Agent 的 tool-calling 循环是脱节的。
+`Agent.prompt()`（`src/agent.ts`）只改了一处调用 + 一处打印：
+
+```ts
+while (true) {
+    const reply = await this.llm.chatStream(messages, this.tools, (text) =>
+        process.stdout.write(text),          // ← 文本增量实时上屏
+    );
+    messages.push(reply);
+
+    if (!reply.toolCalls?.length) {
+        if (reply.content) process.stdout.write("\n");   // 文本已实时打过，只补换行
+        return messages;
+    }
+    // 工具执行分支：完全复用，未改动
+}
+```
+
+- 文本在 `onText` 里已实时打印，所以去掉原来的 `console.log(reply.content)`，结束只补 `\n`，避免重复打印。
+- 工具执行分支（找 tool → try/catch → push toolResult）零改动——得益于 4.1 的"返回同构"设计。
 
 ---
 
-## 7. 与 `chat()` 的对比
+## 6. 验证方式
 
-| | `chat()` | `streamText()` |
-|---|---|---|
-| 请求 | 不带 `stream` | `stream: true` |
-| 响应 | 一次性完整 JSON | SSE 字节流 |
-| 拿到结果的时间 | 等模型全部生成完 | 生成第一个字就开始 |
-| 返回 | `AssistantMessage`（结构化） | `void`（直接打终端） |
-| 用途 | Agent 循环的核心 | 目前是独立演示用 |
-
-**一句话理解整个机制**：`stream: true` 让服务器把"一次完整的回复"改造成"一长串增量事件"；客户端用 `getReader()` 拉字节、用 `TextDecoder` 还原字符串、用 buffer 对齐行边界、用 `JSON.parse` 取 `delta.content`，最后 `write` 出去——四层还原，换来的是"第一个字几乎零延迟上屏"。
+1. **类型检查**：IDEA 编辑器看报错，或命令行 `npx tsc --noEmit`。
+2. **无 API 联调**：临时用 `FakeLlmClient` 跑 `Agent`，预期消息演进：
+   `user → assistant(toolCall) → toolResult → assistant(final)`。
+3. **真机验证**：`main.ts` 用 `RealLlmClient + ReadFileTool`，跑 `读取 Readme.md 并总结`。
+   观察两点：① 回答是否逐字上屏（而非整句瞬间出现）；② 最终回答是否基于文件内容。
 
 ---
 
-## 8. 局限与下一步
+## 7. 已知问题 / 待办（当前实现的小坑）
 
-当前 `streamText` 的边界（对应 `AGENT_EVOLUTION.md` 中"下一步"）：
+- **`chat()` 笔误**：请求体里 `tools: toApiTools` 漏了 `(tools)`，传成了函数本身而非数组。非流式路径目前未使用所以未暴露；修复为 `toApiTools(tools)`。
+- **两轮文本之间缺换行**：第一轮（伴随工具调用）的文本和第二轮最终回答会连在一起（如 `...about.Based on...`）。建议在 `agent.ts` 工具执行分支的 for 循环结束后补 `process.stdout.write("\n")`。
+- **`agent.ts` 的 import**：`import {AgentMessage, LlmClient, Tool}` 全是类型，建议改 `import type {...}`（tsx 能跑，但 Node 原生 type-stripping 需要 `import type`）。另有未使用的 `import * as repl from "node:repl"` 可删。
+- **`fake-llm.ts` 整体被注释掉了**：目前无法脱离真实 API 联调，需要时取消注释（其 `chatStream` 已实现）。
 
-- 只处理 `delta.content`，**未处理 `delta.tool_calls` 增量拼接**——真正接入 Agent 循环时，需要收集 `function.arguments` 片段，流结束后组装完整 JSON 再执行工具；
-- 未处理 `finish_reason`（当前靠 `[DONE]`/`done` 退出）；
-- 未处理 `role` 首帧之外的其他增量字段；
-- 流式输出与 `Agent.prompt()` 循环完全独立，尚未打通"边说边显示 + 工具调用"的完整链路。
+## 8. 下一步方向
+
+- 流式请求支持**取消 / 超时**（`AbortController` 中断 fetch 流）。
+- **多工具**并发/串行调度（当前 for 循环串行执行）。
+- `steer()` / `followUp()` 双层循环（对齐 pi 完整架构）。
+- `finish_reason` 的处理（当前靠 `[DONE]`/`done` 退出）。
+- Session 持久化、上下文压缩。

@@ -27,6 +27,8 @@ export type AgentMessage = UserMessage | AssistantMessage | ToolResultMessage;
 
 export interface LlmClient {
     chat(messages: AgentMessage[], tools: Tool[]): Promise<AssistantMessage>;
+
+    chatStream(messages: AgentMessage[], tools: Tool[], onText: (text: string) => void): Promise<AssistantMessage>;
 }
 
 export interface Tool {
