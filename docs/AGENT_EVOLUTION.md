@@ -73,7 +73,7 @@ Tool       工具协议：名称、说明、参数 schema、execute()
 
 ## 第四阶段：执行真实 read 工具
 
-实现文件：`../src/read-file-tool.ts`
+实现文件：`../src/tools/read-file-tool.ts`
 
 `ReadFileTool` 使用 Node.js 内置模块 `node:fs/promises` 的 `readFile()` 读取文本文件。
 

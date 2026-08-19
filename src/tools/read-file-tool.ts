@@ -1,5 +1,5 @@
 import {readFile} from "node:fs/promises";
-import type {Tool, ToolArguments} from "./types.ts";
+import type {Tool, ToolArguments} from "../types.ts";
 
 export class ReadFileTool implements Tool {
     readonly name = "read";
