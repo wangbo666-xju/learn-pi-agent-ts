@@ -1,4 +1,4 @@
-import {AgentMessage, LlmClient, Tool} from "./types.js";
+import {AgentMessage, LlmClient, Tool} from "./types.ts";
 import * as repl from "node:repl";
 
 class Agent {
