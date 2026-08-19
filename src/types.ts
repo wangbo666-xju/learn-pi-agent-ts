@@ -1,0 +1,35 @@
+export type ToolCall = {
+    id: string;
+    name: string;
+    arguments: {
+        path: string;
+    };
+};
+
+export type UserMessage = {
+    role: "user";
+    content: string;
+};
+
+export type AssistantMessage = {
+    role: "assistant";
+    content: string;
+    toolCalls?: ToolCall[];
+};
+
+export type ToolResultMessage = {
+    role: "toolResult";
+    toolCallId: string;
+    content: string;
+};
+
+export type AgentMessage = UserMessage | AssistantMessage | ToolResultMessage;
+
+export interface LlmClient {
+    chat(messages: AgentMessage[]): Promise<AssistantMessage>;
+}
+
+export interface Tool {
+    name: string;
+    execute(args: { path: string }): Promise<string>;
+}
