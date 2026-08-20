@@ -5,6 +5,7 @@ class Agent {
 
     private readonly llm: LlmClient;
     private readonly tools: Tool[];
+    private readonly maxTurns = 10;
 
 
     constructor(llm: LlmClient, tools: Tool[]) {
@@ -20,7 +21,12 @@ class Agent {
             content: text,
         });
 
+        let step = 0;
         while (true) {
+            step++;
+            if (step > this.maxTurns) {
+                throw new Error("工具调用轮数超限。")
+            }
             const reply = await this.llm.chatStream(messages, this.tools, (text) => process.stdout.write(text));
             messages.push(reply);
 
@@ -36,6 +42,7 @@ class Agent {
             console.log("工具执行状态：", contexts.map((c) => `${c.name}:${c.state}`));
 
             process.stdout.write("\n");
+
 
         }
 

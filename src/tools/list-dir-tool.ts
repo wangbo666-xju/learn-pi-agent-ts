@@ -1,8 +1,14 @@
 import {readdir} from "node:fs/promises";
 import type {Tool, ToolArguments} from "../types.ts";
+import {resolvePath} from "./tool-util.ts";
 
 export class ListDirTool implements Tool {
     readonly name = "listDir";
+    workspaceRoot: string;
+
+    constructor(workspaceRoot: string) {
+        this.workspaceRoot = workspaceRoot;
+    }
 
     readonly description = "列出指定目录下的文件和子目录名称";
 
@@ -17,7 +23,11 @@ export class ListDirTool implements Tool {
 
     async execute(args: ToolArguments): Promise<string> {
         const path = typeof args.path === "string" ? args.path : ".";
-        const entries = await readdir(path, {withFileTypes: true});
+        const absolutePath = resolvePath(
+            this.workspaceRoot,
+            path,
+        );
+        const entries = await readdir(absolutePath, {withFileTypes: true});
 
         return (
             entries
@@ -25,4 +35,5 @@ export class ListDirTool implements Tool {
                 .join("\n") || "(空目录)"
         );
     }
+
 }

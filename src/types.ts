@@ -32,6 +32,7 @@ export interface LlmClient {
 }
 
 export interface Tool {
+    workspaceRoot: string;
     name: string;
     description: string;
     parameters: Record<string, unknown>;

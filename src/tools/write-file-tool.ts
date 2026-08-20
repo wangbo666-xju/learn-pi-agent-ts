@@ -1,8 +1,14 @@
 import {writeFile} from "node:fs/promises";
 import type {Tool, ToolArguments} from "../types.ts";
+import {resolvePath} from "./tool-util.ts";
 
 export class WriteFileTool implements Tool {
     readonly name = "write";
+    workspaceRoot: string;
+
+    constructor(workspaceRoot: string) {
+        this.workspaceRoot = workspaceRoot;
+    }
 
     readonly description = "写入或覆盖指定路径的文本文件";
 
@@ -24,7 +30,13 @@ export class WriteFileTool implements Tool {
             throw new Error("write 工具需要字符串类型的 path 和 content 参数");
         }
 
-        await writeFile(path, content, "utf8");
+        const absolutePath = resolvePath(
+            this.workspaceRoot,
+            path,
+        );
+
+        await writeFile(absolutePath, content, "utf8");
         return `已写入 ${path}（${content.length} 字符）`;
     }
+
 }
