@@ -31,8 +31,9 @@ class Agent {
                 return messages;
             }
 
-            const toolResults = await executeTools(this.tools, reply);
-            messages.push(...toolResults);
+            const {contexts, results} = await executeTools(this.tools, reply);
+            messages.push(...results);
+            console.log("工具执行状态：", contexts.map((c) => `${c.name}:${c.state}`));
 
             process.stdout.write("\n");
 

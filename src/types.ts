@@ -38,3 +38,14 @@ export interface Tool {
 
     execute(args: ToolArguments): Promise<string>;
 }
+
+export type ToolRunContext = {
+    id: string;                       // 对应 toolCall.id
+    name: string;                     // 工具名
+    state: "running" | "done" | "error";
+    startedAt: number;
+    finishedAt?: number;
+    input: ToolArguments;
+    output?: string;
+    error?: string;
+};
