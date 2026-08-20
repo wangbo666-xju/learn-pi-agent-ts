@@ -1,9 +1,10 @@
-import {AssistantMessage, Tool, ToolResultMessage, ToolRunContext} from "./types.ts";
+import {AssistantMessage, BeforeToolCall, Tool, ToolResultMessage, ToolRunContext} from "./types.ts";
 
 
 export async function executeTools(
     tools: Tool[],
     message: AssistantMessage,
+    beforeToolCall?: BeforeToolCall
 ): Promise<{ contexts: ToolRunContext[]; results: ToolResultMessage[] }> {
     const results: ToolResultMessage[] = [];
     const contexts: ToolRunContext[] = [];
@@ -31,10 +32,19 @@ export async function executeTools(
             content = `找不到工具：${toolCall.name}`;
         } else {
             try {
-                const output = await tool.execute(toolCall.arguments);
-                content = output;
-                toolRun.state = "done";
-                toolRun.output = output;
+                const decision = await beforeToolCall?.(toolCall);
+                if (decision?.block) {
+                    toolRun.state = "error";
+                    toolRun.error = decision.reason ?? "该工具被拦截。";
+                    content = `工具调用被拒绝：${toolRun.error}`;
+
+                } else {
+                    const output = await tool.execute(toolCall.arguments);
+                    content = output;
+                    toolRun.state = "done";
+                    toolRun.output = output;
+                }
+
 
             } catch (error) {
                 toolRun.state = "error";

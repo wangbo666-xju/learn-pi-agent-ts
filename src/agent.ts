@@ -1,4 +1,4 @@
-import type {AgentMessage, LlmClient, Tool} from "./types.ts";
+import type {AgentMessage, BeforeToolCall, LlmClient, Tool} from "./types.ts";
 import {executeTools} from "./execute-tools.ts";
 
 class Agent {
@@ -6,11 +6,12 @@ class Agent {
     private readonly llm: LlmClient;
     private readonly tools: Tool[];
     private readonly maxTurns = 10;
+    private readonly beforeToolCall?: BeforeToolCall;
 
-
-    constructor(llm: LlmClient, tools: Tool[]) {
+    constructor(llm: LlmClient, tools: Tool[], beforeToolCall: BeforeToolCall) {
         this.llm = llm;
         this.tools = tools;
+        this.beforeToolCall = beforeToolCall;
     }
 
     async prompt(text: string): Promise<AgentMessage[]> {
@@ -37,7 +38,7 @@ class Agent {
                 return messages;
             }
 
-            const {contexts, results} = await executeTools(this.tools, reply);
+            const {contexts, results} = await executeTools(this.tools, reply, this.beforeToolCall);
             messages.push(...results);
             console.log("工具执行状态：", contexts.map((c) => `${c.name}:${c.state}`));
 

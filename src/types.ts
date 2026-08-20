@@ -50,3 +50,14 @@ export type ToolRunContext = {
     output?: string;
     error?: string;
 };
+
+export type BeforeToolCallResult = {
+
+    block: boolean;
+    reason?: string;
+
+}
+export type BeforeToolCall = (
+    toolCall: ToolCall,
+) => Promise<BeforeToolCallResult | undefined>;
+
