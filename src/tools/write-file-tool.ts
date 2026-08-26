@@ -1,5 +1,5 @@
 import {writeFile} from "node:fs/promises";
-import type {Tool, ToolArguments} from "../types.ts";
+import type {Tool, ToolArguments, ToolExecutionResult} from "../types.ts";
 import {resolvePath} from "./tool-util.ts";
 
 export class WriteFileTool implements Tool {
@@ -22,7 +22,7 @@ export class WriteFileTool implements Tool {
         additionalProperties: false,
     };
 
-    async execute(args: ToolArguments): Promise<string> {
+    async execute(args: ToolArguments): Promise<ToolExecutionResult> {
         const path = args.path;
         const content = args.content;
 
@@ -36,7 +36,9 @@ export class WriteFileTool implements Tool {
         );
 
         await writeFile(absolutePath, content, "utf8");
-        return `已写入 ${path}（${content.length} 字符）`;
+        return {
+            content: `已写入 ${path}（${content.length} 字符）`
+        }
     }
 
 }

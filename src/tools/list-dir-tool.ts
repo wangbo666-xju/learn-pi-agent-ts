@@ -1,5 +1,5 @@
 import {readdir} from "node:fs/promises";
-import type {Tool, ToolArguments} from "../types.ts";
+import type {Tool, ToolArguments, ToolExecutionResult} from "../types.ts";
 import {resolvePath} from "./tool-util.ts";
 
 export class ListDirTool implements Tool {
@@ -21,7 +21,7 @@ export class ListDirTool implements Tool {
         additionalProperties: false,
     };
 
-    async execute(args: ToolArguments): Promise<string> {
+    async execute(args: ToolArguments): Promise<ToolExecutionResult> {
         const path = typeof args.path === "string" ? args.path : ".";
         const absolutePath = resolvePath(
             this.workspaceRoot,
@@ -29,11 +29,14 @@ export class ListDirTool implements Tool {
         );
         const entries = await readdir(absolutePath, {withFileTypes: true});
 
-        return (
-            entries
-                .map((e) => (e.isDirectory() ? `[dir] ${e.name}` : `     ${e.name}`))
-                .join("\n") || "(空目录)"
-        );
+        return {
+            content:
+                entries
+                    .map((e) => (e.isDirectory() ? `[dir] ${e.name}` : `     ${e.name}`))
+                    .join("\n") || "(空目录)"
+        };
+
+
     }
 
 }

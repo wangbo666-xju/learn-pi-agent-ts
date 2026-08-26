@@ -17,10 +17,18 @@ export type AssistantMessage = {
     toolCalls?: ToolCall[];
 };
 
+export type ToolExecutionResult = {
+    content: string;
+    details?: unknown;
+    terminate?: boolean;
+};
+
 export type ToolResultMessage = {
     role: "toolResult";
     toolCallId: string;
     content: string;
+    isError: boolean;
+    details?: unknown;
 };
 
 export type AgentMessage = UserMessage | AssistantMessage | ToolResultMessage;
@@ -32,12 +40,11 @@ export interface LlmClient {
 }
 
 export interface Tool {
-    workspaceRoot: string;
     name: string;
     description: string;
     parameters: Record<string, unknown>;
 
-    execute(args: ToolArguments): Promise<string>;
+    execute(args: ToolArguments): Promise<ToolExecutionResult>;
 }
 
 export type ToolRunContext = {

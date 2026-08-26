@@ -1,13 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import Agent from "../src/agent.ts";
-import { FakeLlmClient } from "../src/fake-llm.ts";
-import type { BeforeToolCall, Tool, ToolArguments } from "../src/types.ts";
+import {FakeLlmClient} from "../src/fake-llm.ts";
+import type {BeforeToolCall, Tool, ToolArguments, ToolExecutionResult} from "../src/types.ts";
 
 const allowAll: BeforeToolCall = async () => undefined;
 
 class TestTool implements Tool {
-    readonly workspaceRoot = process.cwd();
     readonly name = "echo";
     readonly description = "返回传入的文本";
     readonly parameters = {
@@ -25,7 +24,7 @@ class TestTool implements Tool {
         this.errorMessage = errorMessage;
     }
 
-    async execute(args: ToolArguments): Promise<string> {
+    async execute(args: ToolArguments): Promise<ToolExecutionResult> {
         this.inputs.push(args);
         if (this.errorMessage) {
             throw new Error(this.errorMessage);
@@ -33,7 +32,9 @@ class TestTool implements Tool {
         if (typeof args.text !== "string") {
             throw new Error("echo 工具缺少 text 参数");
         }
-        return `echo:${args.text}`;
+        return {
+            content: `echo:${args.text}`,
+        };
     }
 }
 
@@ -81,6 +82,8 @@ test("模型调用工具后把工具结果加入上下文并继续请求模型",
         role: "toolResult",
         toolCallId: "call-1",
         content: "echo:hello",
+        isError: false,
+        details: undefined,
     });
     assert.deepEqual(llm.requests[1]?.messages, messages.slice(0, 3));
 });
@@ -104,6 +107,8 @@ test("工具抛出异常时把错误作为 toolResult 回传给模型", async ()
         role: "toolResult",
         toolCallId: "call-error",
         content: "工具执行失败: boom",
+        isError: true,
+        details: undefined,
     });
     assert.equal(messages.at(-1)?.role, "assistant");
 });
@@ -133,5 +138,7 @@ test("beforeToolCall 拦截时不执行工具并把拒绝原因回传给模型",
         role: "toolResult",
         toolCallId: "call-blocked",
         content: "工具调用被拒绝：测试策略拒绝执行",
+        isError: true,
+        details: undefined,
     });
 });

@@ -1,5 +1,5 @@
 import {readFile} from "node:fs/promises";
-import type {Tool, ToolArguments} from "../types.ts";
+import type {Tool, ToolArguments, ToolExecutionResult} from "../types.ts";
 import {resolvePath} from "./tool-util.ts";
 
 export class ReadFileTool implements Tool {
@@ -25,7 +25,7 @@ export class ReadFileTool implements Tool {
     };
 
 
-    async execute(args: ToolArguments): Promise<string> {
+    async execute(args: ToolArguments): Promise<ToolExecutionResult> {
         const path = args.path;
 
         if (typeof path !== "string") {
@@ -36,8 +36,9 @@ export class ReadFileTool implements Tool {
             this.workspaceRoot,
             path,
         );
-        return readFile(absolutePath, "utf8");
-
+        return {
+            content: await readFile(absolutePath, "utf8"),
+        };
     }
 
 

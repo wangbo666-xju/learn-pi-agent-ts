@@ -26,10 +26,15 @@ export async function executeTools(
 
 
         let content: string;
+        let isError: boolean;
+        let details: unknown = undefined;
 
         if (!tool) {
             toolRun.state = "error";
-            content = `找不到工具：${toolCall.name}`;
+            toolRun.error = `找不到工具：${toolCall.name}`;
+
+            content = toolRun.error;
+            isError = true;
         } else {
             try {
                 const decision = await beforeToolCall?.(toolCall);
@@ -37,12 +42,17 @@ export async function executeTools(
                     toolRun.state = "error";
                     toolRun.error = decision.reason ?? "该工具被拦截。";
                     content = `工具调用被拒绝：${toolRun.error}`;
+                    isError = true;
 
                 } else {
                     const output = await tool.execute(toolCall.arguments);
-                    content = output;
+
+                    content = output.content;
+                    details = output.details;
+                    isError = false;
+
                     toolRun.state = "done";
-                    toolRun.output = output;
+                    toolRun.output = output.content;
                 }
 
 
@@ -50,6 +60,8 @@ export async function executeTools(
                 toolRun.state = "error";
                 toolRun.error = error instanceof Error ? error.message : String(error);
                 content = `工具执行失败: ${toolRun.error}`;
+                isError = true;
+
             }
         }
         toolRun.finishedAt = Date.now();
@@ -59,6 +71,8 @@ export async function executeTools(
             role: "toolResult",
             toolCallId: toolCall.id,
             content,
+            isError,
+            details
         });
 
     }
