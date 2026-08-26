@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "tsx src/main.ts",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "tsx --test test/agent.test.ts",
+    "check": "tsc --noEmit"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",

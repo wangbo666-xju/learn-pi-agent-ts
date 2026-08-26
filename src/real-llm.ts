@@ -127,7 +127,7 @@ export class RealLlmClient implements LlmClient {
             },
             body: JSON.stringify({
                 model,
-                stream: true,
+                stream: true,//流式
                 messages: toApiMessages(messages),
                 tools: toApiTools(tools),
                 tool_choice: "auto"
