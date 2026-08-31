@@ -1,5 +1,9 @@
 import type {AgentMessage, BeforeToolCall, LlmClient, Tool} from "./types.ts";
 import {executeTools} from "./execute-tools.ts";
+import {randomUUID} from "node:crypto";
+import type {SessionStore} from "./session/session-store.ts";
+import {MemorySessionStore} from "./session/memory-session-store.ts";
+
 
 class Agent {
 
@@ -7,20 +11,28 @@ class Agent {
     private readonly tools: Tool[];
     private readonly maxTurns = 10;
     private readonly beforeToolCall?: BeforeToolCall;
+    private readonly sessionStore: SessionStore;
 
-    constructor(llm: LlmClient, tools: Tool[], beforeToolCall: BeforeToolCall) {
+    constructor(llm: LlmClient, tools: Tool[], beforeToolCall: BeforeToolCall, sessionStore: SessionStore) {
         this.llm = llm;
         this.tools = tools;
         this.beforeToolCall = beforeToolCall;
+        this.sessionStore = sessionStore ?? new MemorySessionStore({id: randomUUID(), createdAt: Date.now()})
     }
 
     async prompt(text: string): Promise<AgentMessage[]> {
-        const messages: AgentMessage[] = [];
+        // 不再从空数组开始，而是恢复当前 Session 的历史。
+        const messages = await this.sessionStore.getMessages();
 
-        messages.push({
+        const userMessage: AgentMessage = {
             role: "user",
             content: text,
-        });
+        };
+
+        messages.push(userMessage);
+
+        // user 消息形成后立即保存。
+        await this.sessionStore.appendMessage(userMessage);
 
         let step = 0;
         while (true) {
@@ -31,6 +43,10 @@ class Agent {
             const reply = await this.llm.chatStream(messages, this.tools, (text) => process.stdout.write(text));
             messages.push(reply);
 
+            // 流结束后才保存完整 assistant 消息。
+            // text_delta 阶段不落库。
+            await this.sessionStore.appendMessage(reply);
+
             if (!reply.toolCalls?.length) {
                 if (reply.content) {
                     process.stdout.write("\n");   // 文本已经实时打过了，这里只补个换行
@@ -40,6 +56,12 @@ class Agent {
 
             const {contexts, results} = await executeTools(this.tools, reply, this.beforeToolCall);
             messages.push(...results);
+
+            // 每条 toolResult 都是完整 AgentMessage，需要进入 Session。
+            for (const result of results) {
+                await this.sessionStore.appendMessage(result);
+            }
+
             console.log("工具执行状态：", contexts.map((c) => `${c.name}:${c.state}`));
 
             process.stdout.write("\n");

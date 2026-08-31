@@ -3,6 +3,8 @@ import test from "node:test";
 import Agent from "../src/agent.ts";
 import {FakeLlmClient} from "../src/fake-llm.ts";
 import type {BeforeToolCall, Tool, ToolArguments, ToolExecutionResult} from "../src/types.ts";
+import {MemorySessionStore} from "../src/session/memory-session-store.ts";
+import {randomUUID} from "node:crypto";
 
 const allowAll: BeforeToolCall = async () => undefined;
 
@@ -42,7 +44,11 @@ test("模型直接回答时结束循环并返回本轮消息", async () => {
     const llm = new FakeLlmClient([
         {role: "assistant", content: "直接回答"},
     ]);
-    const agent = new Agent(llm, [], allowAll);
+    const sessionStore = new MemorySessionStore({
+        id: "session-1",
+        createdAt: 1000,
+    });
+    const agent = new Agent(llm, [], allowAll, sessionStore);
 
     const messages = await agent.prompt("你好");
 
@@ -68,7 +74,11 @@ test("模型调用工具后把工具结果加入上下文并继续请求模型",
         {role: "assistant", content: "工具执行完成"},
     ]);
     const tool = new TestTool();
-    const agent = new Agent(llm, [tool], allowAll);
+    const sessionStore = new MemorySessionStore({
+        id: "session-1",
+        createdAt: 1000,
+    });
+    const agent = new Agent(llm, [tool], allowAll, sessionStore);
 
     const messages = await agent.prompt("调用 echo");
 
@@ -99,7 +109,14 @@ test("工具抛出异常时把错误作为 toolResult 回传给模型", async ()
         },
         {role: "assistant", content: "已收到工具错误"},
     ]);
-    const agent = new Agent(llm, [new TestTool("boom")], allowAll);
+
+    const sessionStore = new MemorySessionStore({
+        id: "session-1",
+        createdAt: 1000,
+    });
+
+
+    const agent = new Agent(llm, [new TestTool("boom")], allowAll, sessionStore);
 
     const messages = await agent.prompt("执行一个失败工具");
 
@@ -129,7 +146,11 @@ test("beforeToolCall 拦截时不执行工具并把拒绝原因回传给模型",
         block: true,
         reason: "测试策略拒绝执行",
     });
-    const agent = new Agent(llm, [tool], blockAll);
+    const sessionStore = new MemorySessionStore({
+        id: "session-1",
+        createdAt: 1000,
+    });
+    const agent = new Agent(llm, [tool], blockAll, sessionStore);
 
     const messages = await agent.prompt("调用被禁止的工具");
 
@@ -141,4 +162,66 @@ test("beforeToolCall 拦截时不执行工具并把拒绝原因回传给模型",
         isError: true,
         details: undefined,
     });
+});
+
+test("连续调用 prompt 时会携带 Session 中的历史消息", async () => {
+    const llm = new FakeLlmClient([
+        {
+            role: "assistant",
+            content: "第一次回答",
+        },
+        {
+            role: "assistant",
+            content: "第二次回答",
+        },
+    ]);
+
+    const sessionStore = new MemorySessionStore({
+        id: "session-1",
+        createdAt: 1000,
+    });
+
+    const agent = new Agent(
+        llm,
+        [],
+        allowAll,
+        sessionStore,
+    );
+
+    await agent.prompt("第一次提问");
+    await agent.prompt("第二次提问");
+
+    assert.deepEqual(llm.requests[1]?.messages, [
+        {
+            role: "user",
+            content: "第一次提问",
+        },
+        {
+            role: "assistant",
+            content: "第一次回答",
+        },
+        {
+            role: "user",
+            content: "第二次提问",
+        },
+    ]);
+
+    assert.deepEqual(await sessionStore.getMessages(), [
+        {
+            role: "user",
+            content: "第一次提问",
+        },
+        {
+            role: "assistant",
+            content: "第一次回答",
+        },
+        {
+            role: "user",
+            content: "第二次提问",
+        },
+        {
+            role: "assistant",
+            content: "第二次回答",
+        },
+    ]);
 });
