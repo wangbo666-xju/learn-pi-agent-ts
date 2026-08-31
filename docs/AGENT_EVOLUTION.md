@@ -190,7 +190,84 @@ AgentMessage → DeepSeek messages
 
 这对应 pi 中 `executePreparedToolCall()` 捕获异常、`createErrorToolResult()` 生成模型可读错误的核心设计。
 
-## 下一步
+## 后续开发计划
 
-实现流式输出：将当前一次性等待完整回复的 `await llm.chat()`，改为持续接收模型事件；
-文本到达时立即输出，流结束时再组装完整的 `AssistantMessage`。这对应 pi 的 `StreamFn` 和 `streamAssistantResponse()`。
+当前已经完成流式输出、最大工具轮数、工具错误回传、`beforeToolCall` 策略以及 read/write/listDir 工具。
+下一阶段不继续增加工具，而是让 Agent 具备可恢复的 Session，再加入 Skill。
+
+### 阶段一：Session 数据结构与存储接口
+
+新增：
+
+```text
+src/session/types.ts
+src/session/session-store.ts
+```
+
+先定义 Session 元数据、消息 Entry 和存储接口。这个阶段只建立协议，不修改 Agent Loop。
+
+验收标准：
+
+```text
+npx tsc --noEmit
+```
+
+### 阶段二：内存 Session
+
+实现 `MemorySessionStore`，验证消息可以追加并按原顺序读回。先用内存实现调试，避免同时处理文件系统问题。
+
+### 阶段三：Session 接入 Agent
+
+`Agent.prompt()` 不再每次创建空消息数组，而是从 Session 读取历史；user、assistant 和 toolResult
+在形成完整消息后写入 Session。流式 `text_delta` 不落库，只保存最终完整消息。
+
+### 阶段四：JSONL 持久化
+
+实现 `JsonlSessionStore`：第一行保存 header，后续每行保存一条 message Entry。使用追加写入，启动时逐行解析恢复。
+
+### 阶段五：CLI 会话管理
+
+实现 `SessionManager` 和三个命令：
+
+```text
+/new             新建空会话
+/sessions        查看历史会话
+/resume <id>     恢复历史会话
+```
+
+### 阶段六：Skill
+
+实现 Skill 目录扫描、`SKILL.md` 读取和 `/skill:name` 显式调用。Skill 内容只负责向上下文注入规则，实际能力仍由 Tool 提供。
+
+### 阶段七：上下文压缩
+
+当消息超过 token 阈值时生成摘要，后续请求使用“摘要 + 最近消息”。压缩结果作为独立 Entry 持久化。
+
+### 阶段八：高级 Session 与运行治理
+
+最后再增加：
+
+```text
+parentId / Lane / fork
+Record 与运行恢复
+工具超时和 AbortSignal
+afterToolCall
+LLM 网络错误重试
+TUI
+```
+
+完整顺序：
+
+```text
+Session 类型
+→ MemorySessionStore
+→ 接入 Agent 消息流
+→ JsonlSessionStore
+→ 恢复历史
+→ /new、/sessions、/resume
+→ SkillLoader
+→ /skill:name
+→ Compact
+→ Lane / fork / Record
+→ TUI
+```
