@@ -1,8 +1,6 @@
 import type {AgentMessage, BeforeToolCall, LlmClient, Tool} from "./types.ts";
 import {executeTools} from "./execute-tools.ts";
-import {randomUUID} from "node:crypto";
 import type {SessionStore} from "./session/session-store.ts";
-import {MemorySessionStore} from "./session/memory-session-store.ts";
 
 
 class Agent {
@@ -17,7 +15,7 @@ class Agent {
         this.llm = llm;
         this.tools = tools;
         this.beforeToolCall = beforeToolCall;
-        this.sessionStore = sessionStore ?? new MemorySessionStore({id: randomUUID(), createdAt: Date.now()})
+        this.sessionStore = sessionStore;
     }
 
     async prompt(text: string): Promise<AgentMessage[]> {

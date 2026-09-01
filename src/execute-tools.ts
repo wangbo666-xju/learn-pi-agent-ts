@@ -1,4 +1,4 @@
-import {AssistantMessage, BeforeToolCall, Tool, ToolResultMessage, ToolRunContext} from "./types.ts";
+import type {AssistantMessage, BeforeToolCall, Tool, ToolResultMessage, ToolRunContext} from "./types.ts";
 
 
 export async function executeTools(

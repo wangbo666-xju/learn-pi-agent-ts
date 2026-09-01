@@ -1,5 +1,4 @@
-import {AgentMessage} from "../types.ts";
-
+import type {AgentMessage} from "../types.ts";
 
 /**
  * 当前 Session 文件格式版本。
