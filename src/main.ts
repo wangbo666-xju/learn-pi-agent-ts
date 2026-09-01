@@ -9,15 +9,13 @@ import {existsSync} from "node:fs";
 import {randomUUID} from "node:crypto";
 import {resolve} from "node:path";
 import {JsonlSessionStore} from "./session/jsonl-session-store.ts";
+import { SessionManager } from "./session/session-manager.ts";
 
 let cwd = process.cwd();
-const sessionPath = resolve("sessions/dev-session.jsonl");
-const sessionStore = existsSync(sessionPath)
-    ? await JsonlSessionStore.open(sessionPath)
-    : await JsonlSessionStore.create(sessionPath, {
-        id: randomUUID(),
-        createdAt: Date.now(),
-    });
+
+
+const sessionManager = new SessionManager(resolve("sessions"));
+const sessionStore = await sessionManager.create();
 
 const policy = createToolPolicy(async (toolCall) => {
     console.log("准备执行工具：", toolCall.name, toolCall.arguments);
