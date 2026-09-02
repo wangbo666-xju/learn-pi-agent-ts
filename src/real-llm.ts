@@ -1,4 +1,11 @@
-import type {AgentMessage, AssistantMessage, LlmClient, Tool, ToolArguments} from "./types.ts";
+import type {
+    AgentMessage,
+    AssistantMessage,
+    LlmClient,
+    LlmRequestOptions,
+    Tool,
+    ToolArguments,
+} from "./types.ts";
 import {TextDecoder} from "node:util";
 
 
@@ -43,10 +50,12 @@ type StreamChunk = {
 
 export class RealLlmClient implements LlmClient {
 
-    async chat(messages: AgentMessage[], tools: Tool[]): Promise<AssistantMessage> {
+    async chat(messages: AgentMessage[], tools: Tool[], options?: LlmRequestOptions,): Promise<AssistantMessage> {
         const {apiKey, baseUrl, model} = requireConfig();
-        const apiMessages = toApiMessages(messages);
-
+        const apiMessages = toApiMessages(
+            messages,
+            options?.systemPrompt,
+        );
         const response = await fetch(`${baseUrl}/chat/completions`, {
             method: "POST",
             headers: {
@@ -114,7 +123,7 @@ export class RealLlmClient implements LlmClient {
 
     }
 
-    async chatStream(messages: AgentMessage[], tools: Tool[], onText: (text: string) => void): Promise<AssistantMessage> {
+    async chatStream(messages: AgentMessage[], tools: Tool[], onText: (text: string) => void, options?: LlmRequestOptions,): Promise<AssistantMessage> {
 
         const {apiKey, baseUrl, model} = requireConfig();
 
@@ -128,8 +137,10 @@ export class RealLlmClient implements LlmClient {
             body: JSON.stringify({
                 model,
                 stream: true,//流式
-                messages: toApiMessages(messages),
-                tools: toApiTools(tools),
+                messages: toApiMessages(
+                    messages,
+                    options?.systemPrompt,
+                ), tools: toApiTools(tools),
                 tool_choice: "auto"
 
             }),
@@ -207,40 +218,49 @@ function requireConfig() {
     return {apiKey, baseUrl, model};
 }
 
-function toApiMessages(messages: AgentMessage[]) {
-    return messages.map((message) => {
+function toApiMessages(
+    messages: AgentMessage[],
+    systemPrompt?: string,
+) {
+    const apiMessages = messages.map((message) => {
         if (message.role === "toolResult") {
             return {
                 role: "tool",
                 tool_call_id: message.toolCallId,
                 content: message.content,
-            }
+            };
         }
 
         if (message.role === "assistant" && message.toolCalls?.length) {
             return {
                 role: "assistant",
                 content: message.content || null,
-                tool_calls: message.toolCalls.map((toolCall => ({
+                tool_calls: message.toolCalls.map((toolCall) => ({
                     id: toolCall.id,
                     type: "function",
                     function: {
                         name: toolCall.name,
                         arguments: JSON.stringify(toolCall.arguments),
-
-                    }
-
-                })))
-            }
+                    },
+                })),
+            };
         }
 
         return {
             role: message.role,
-            content: message.content
-        }
+            content: message.content,
+        };
+    });
 
-    })
-
+    return systemPrompt
+        ? [
+            {
+                role: "system",
+                content: systemPrompt,
+            },
+            ...apiMessages,
+        ]
+        : apiMessages;
 }
 
 

@@ -34,10 +34,23 @@ export type ToolResultMessage = {
 export type AgentMessage = UserMessage | AssistantMessage | ToolResultMessage;
 
 export interface LlmClient {
-    chat(messages: AgentMessage[], tools: Tool[]): Promise<AssistantMessage>;
+    chat(
+        messages: AgentMessage[],
+        tools: Tool[],
+        options?: LlmRequestOptions,
+    ): Promise<AssistantMessage>;
 
-    chatStream(messages: AgentMessage[], tools: Tool[], onText: (text: string) => void): Promise<AssistantMessage>;
+    chatStream(
+        messages: AgentMessage[],
+        tools: Tool[],
+        onText: (text: string) => void,
+        options?: LlmRequestOptions,
+    ): Promise<AssistantMessage>;
 }
+
+export type LlmRequestOptions = {
+    systemPrompt?: string;
+};
 
 export interface Tool {
     name: string;

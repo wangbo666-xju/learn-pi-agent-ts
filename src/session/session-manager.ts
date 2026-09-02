@@ -54,6 +54,11 @@ export class SessionManager {
     }
 
     private getSessionPath(sessionId: string): string {
+        // sessionId 来自 CLI 输入；只接受文件名安全字符，防止 ../ 跳出 sessions 目录。
+        if (!/^[a-zA-Z0-9_-]+$/.test(sessionId)) {
+            throw new Error(`非法 sessionId：${sessionId}`);
+        }
+
         return join(this.sessionsDir, `${sessionId}.jsonl`);
     }
 }

@@ -10,12 +10,14 @@ class Agent {
     private readonly maxTurns = 10;
     private readonly beforeToolCall?: BeforeToolCall;
     private readonly sessionStore: SessionStore;
+    private readonly systemPrompt: string;
 
-    constructor(llm: LlmClient, tools: Tool[], beforeToolCall: BeforeToolCall, sessionStore: SessionStore) {
+    constructor(llm: LlmClient, tools: Tool[], beforeToolCall: BeforeToolCall, sessionStore: SessionStore, systemPrompt = "",) {
         this.llm = llm;
         this.tools = tools;
         this.beforeToolCall = beforeToolCall;
         this.sessionStore = sessionStore;
+        this.systemPrompt = systemPrompt;
     }
 
     async prompt(text: string): Promise<AgentMessage[]> {
@@ -38,7 +40,16 @@ class Agent {
             if (step > this.maxTurns) {
                 throw new Error("工具调用轮数超限。")
             }
-            const reply = await this.llm.chatStream(messages, this.tools, (text) => process.stdout.write(text));
+
+            const reply = await this.llm.chatStream(
+                messages,
+                this.tools,
+                (text) => process.stdout.write(text),
+                {
+                    systemPrompt: this.systemPrompt,
+                },
+            );
+
             messages.push(reply);
 
             // 流结束后才保存完整 assistant 消息。
