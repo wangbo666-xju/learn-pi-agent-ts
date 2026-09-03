@@ -1,5 +1,7 @@
 # 下一步规划（TODO）
 
+> 本文是流式输出阶段的历史计划，不再作为当前任务清单。新的学习版 Agent 计划见 [`PI_AGENT_LEARNING_DESIGN.md`](./PI_AGENT_LEARNING_DESIGN.md) 和 [`2026-09-03-pi-agent-learning-core.md`](./superpowers/plans/2026-09-03-pi-agent-learning-core.md)。
+>
 > 状态：**规划阶段，暂不写代码**。本文档记录当前实现与 pi 架构的差距分析，以及后续演进步骤。
 > 每步都给出目标、涉及文件、验收标准，做一步勾一步。
 

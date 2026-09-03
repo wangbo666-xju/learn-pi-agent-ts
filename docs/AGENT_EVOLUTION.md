@@ -1,5 +1,7 @@
 # 我的 TypeScript Agent 演进记录
 
+> 本文保留早期学习过程，其中部分“当前状态”和“后续计划”已经完成。当前架构与收尾范围以 [`PI_AGENT_LEARNING_DESIGN.md`](./PI_AGENT_LEARNING_DESIGN.md) 为准，具体执行步骤见 [`2026-09-03-pi-agent-learning-core.md`](./superpowers/plans/2026-09-03-pi-agent-learning-core.md)。
+
 ## 目标
 
 手写一个最小可运行的 Agent，用它理解 pi 中的 `agent-loop`、Tool Calling 和工具执行，而不是直接复刻完整框架。
