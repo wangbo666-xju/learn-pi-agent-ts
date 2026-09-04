@@ -1,5 +1,7 @@
 # Pi Agent 学习版 Implementation Plan
 
+> 历史总计划：已拆分并修订为 `docs/task/00-INDEX.md` 下的可执行任务。后续实施以 `docs/task/` 为准，本文件只保留设计演进记录。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 在现有 Loop、SSE、Tool、Session 和 Skill 基础上，补齐状态、事件、运行控制、双层循环和上下文边界，完成 Pi 风格学习版 Agent Core。

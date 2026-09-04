@@ -74,7 +74,8 @@
 - `AgentState.messages` 是当前运行上下文。
 - `SessionStore` 是已经完成消息的持久化记录。
 - partial assistant 消息只存在于 `streamingMessage`。
-- `message_end` 后才把完整消息加入 Session。
+- Loop 只在消息完整时把它加入 `context.messages`，并发布 `message_end`。
+- Session 监听器收到 `message_end` 后才持久化该完整消息。
 
 ### 4.5 错误也必须保持协议完整
 
@@ -90,7 +91,7 @@ Agent（公开控制器）
  ├─ AgentState
  ├─ Event Subscribers
  ├─ SteeringQueue / FollowUpQueue
- └─ activeRun + AbortController
+ └─ activeRun + idlePromise + AbortController
           │
           ▼
       agent-loop
@@ -180,7 +181,9 @@ agent_start
 agent_end
 ```
 
-订阅者按注册顺序等待执行完成。这样 `message_end` 的 Session 保存可以作为进入下一阶段之前的屏障。
+订阅者按注册顺序等待执行完成。这样 `message_end` 的 Session 保存可以作为进入下一阶段之前的屏障。若监听器失败，Loop 进入统一错误收尾并仍发布一次 `agent_end`。
+
+消息和实时字段的所有权不同：Loop 负责向传入的 `context.messages` 追加完整消息；`Agent.applyEvent()` 只维护 `isRunning`、`streamingMessage`、`pendingToolCalls` 和错误状态，不重复追加 transcript。
 
 ## 9. Context 管线
 
@@ -220,11 +223,12 @@ LlmClient.chatStream(llmMessages)
 优先级固定为：
 
 ```text
-shouldStopAfterTurn
+abort / maxTurns
+→ shouldStopAfterTurn
 → steer
-→ 工具结果触发的自动下一轮
+→ 未终止工具结果触发的自动下一轮
 → followUp
-→ 正常结束
+→ terminated / 正常结束
 ```
 
 ## 11. Session 集成
@@ -234,8 +238,8 @@ Session 使用现有 JSONL 格式，不修改历史文件结构。
 ```text
 message_start   → 只更新 AgentState
 message_update  → 根据 text_delta/toolcall_delta 替换 streamingMessage
-message_end     → 更新 AgentState.messages，并 appendMessage()
-agent_end       → 等待所有持久化操作完成
+message_end     → Loop 已追加 context.messages；Session 监听器 appendMessage()
+agent_end       → 清理 isRunning、streamingMessage 和 pendingToolCalls
 ```
 
 恢复会话时：
