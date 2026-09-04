@@ -1,7 +1,7 @@
 import type {
     AgentMessage,
     AssistantMessage,
-    LlmClient,
+    LlmClient, LlmStreamListener,
     Tool,
 } from "./types.ts";
 
@@ -38,12 +38,30 @@ export class FakeLlmClient implements LlmClient {
     async chatStream(
         messages: AgentMessage[],
         tools: Tool[],
-        onText: (text: string) => void,
+        onEvent: LlmStreamListener,
     ): Promise<AssistantMessage> {
         const response = await this.chat(messages, tools);
+        await onEvent({
+            type: "start",
+            partial: {role: "assistant", content: ""},
+        });
+
         if (response.content) {
-            onText(response.content);
+            await onEvent({
+                type: "text_delta",
+                delta: response.content,
+                partial: {role: "assistant", content: response.content},
+            });
         }
+        if (response.toolCalls?.length) {
+            await onEvent({
+                type: "toolcall_delta",
+                partial: {role: "assistant", content: response.content},
+            });
+        }
+
+        await onEvent({type: "done", message: structuredClone(response)});
+
         return response;
     }
 }

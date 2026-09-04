@@ -43,7 +43,7 @@ export interface LlmClient {
     chatStream(
         messages: AgentMessage[],
         tools: Tool[],
-        onText: (text: string) => void,
+        onEvent: LlmStreamListener,
         options?: LlmRequestOptions,
     ): Promise<AssistantMessage>;
 }
@@ -51,6 +51,30 @@ export interface LlmClient {
 export type LlmRequestOptions = {
     systemPrompt?: string;
 };
+
+
+export type LlmStreamEvent =
+    | {
+    type: "start";
+    partial: AssistantMessage;
+}
+    | {
+    type: "text_delta";
+    delta: string;
+    partial: AssistantMessage;
+}
+    | {
+    type: "toolcall_delta";
+    partial: AssistantMessage;
+}
+    | {
+    type: "done";
+    message: AssistantMessage;
+};
+
+export type LlmStreamListener = (
+    event: LlmStreamEvent,
+) => void | Promise<void>;
 
 export interface Tool {
     name: string;

@@ -1,8 +1,8 @@
-import type {
+import {
     AgentMessage,
     AssistantMessage,
     LlmClient,
-    LlmRequestOptions,
+    LlmRequestOptions, LlmStreamListener,
     Tool,
     ToolArguments,
 } from "./types.ts";
@@ -123,7 +123,8 @@ export class RealLlmClient implements LlmClient {
 
     }
 
-    async chatStream(messages: AgentMessage[], tools: Tool[], onText: (text: string) => void, options?: LlmRequestOptions,): Promise<AssistantMessage> {
+    async chatStream(messages: AgentMessage[], tools: Tool[], onEvent: LlmStreamListener,
+                     options?: LlmRequestOptions,): Promise<AssistantMessage> {
 
         const {apiKey, baseUrl, model} = requireConfig();
 
@@ -151,32 +152,56 @@ export class RealLlmClient implements LlmClient {
 
         let content = "";
 
+        await onEvent({
+            type: "start",
+            partial: {role: "assistant", content: ""},
+        });
+
         // 按 index 分组累加工具调用碎片
         const toolCallFragments = new Map<number, { id: string; name: string; argumentsText: string }>();
 
-        await readSseChunks(response, (chunk) => {
+        await readSseChunks(response, async (chunk) => {
             let delta = chunk.choices[0]?.delta;
             if (!delta) {
                 return;
             }
+
             if (delta.content) {
                 content += delta.content;
-                onText(delta.content);
+                await onEvent({
+                    type: "text_delta",
+                    delta: delta.content,
+                    partial: {role: "assistant", content},
+                });
             }
+
+            let hasToolFragment = false;
 
             for (const fragment of delta.tool_calls ?? []) {
                 const index = fragment.index ?? 0;
-                let acc = toolCallFragments.get(index);
-                if (!acc) {
-                    acc = {id: fragment.id ?? "", name: fragment.function?.name ?? "", argumentsText: ""};
-                    toolCallFragments.set(index, acc);
+                let current = toolCallFragments.get(index);
+                if (!current) {
+                    current = {
+                        id: fragment.id ?? "",
+                        name: fragment.function?.name ?? "",
+                        argumentsText: ""
+                    };
+                    toolCallFragments.set(index, current);
                 }
-                if (fragment.id) acc.id = fragment.id;
-                if (fragment.function?.name) acc.name = fragment.function.name;
-                if (fragment.function?.arguments) acc.argumentsText += fragment.function.arguments;
+                if (fragment.id) current.id = fragment.id;
+                if (fragment.function?.name) current.name = fragment.function.name;
+                if (fragment.function?.arguments) current.argumentsText += fragment.function.arguments;
 
-
+                hasToolFragment = true;
             }
+
+            if (hasToolFragment) {
+                await onEvent({
+                    type: "toolcall_delta",
+                    partial: {role: "assistant", content},
+                });
+            }
+
         });
 
         // 流结束：按 index 排序组装，与非流式 chat() 结构一致
@@ -188,11 +213,15 @@ export class RealLlmClient implements LlmClient {
                 arguments: argumentsText ? parseToolArguments(argumentsText) : {},
             }));
 
-        return {
+        const message: AssistantMessage = {
             role: "assistant",
             content,
-            toolCalls: toolCalls.length ? toolCalls : undefined,
+            toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
         };
+
+        await onEvent({type: "done", message});
+
+        return message;
     }
 
 

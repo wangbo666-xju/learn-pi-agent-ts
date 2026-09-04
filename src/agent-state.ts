@@ -1,5 +1,8 @@
-import {AgentMessage, AssistantMessage, Tool} from "./types.js";
-
+import type {
+    AgentMessage,
+    AssistantMessage,
+    Tool,
+} from "./types.ts";
 
 /**
  * Agent 在当前进程中的实时状态。
