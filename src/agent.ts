@@ -1,83 +1,142 @@
-import type {AgentMessage, BeforeToolCall, LlmClient, Tool} from "./types.ts";
-import {executeTools} from "./execute-tools.ts";
+import type {
+    AgentMessage,
+    BeforeToolCall,
+    LlmClient,
+    Tool,
+} from "./types.ts";
+import type {ConvertToLlm, TransformContext} from "./context.ts";
+import {
+    createAgentState,
+    type AgentState,
+} from "./agent-state.ts";
+import {
+    AgentEventBus,
+    type AgentEvent,
+    type AgentEventListener,
+} from "./agent-events.ts";
+import {runAgentLoop} from "./agent-loop.ts";
 import type {SessionStore} from "./session/session-store.ts";
+
+export type AgentOptions = {
+    llm: LlmClient;
+    tools: Tool[];
+    sessionStore: SessionStore;
+    beforeToolCall?: BeforeToolCall;
+    systemPrompt?: string;
+    initialMessages?: AgentMessage[];
+    maxTurns?: number;
+    transformContext?: TransformContext;
+    convertToLlm?: ConvertToLlm;
+};
 
 
 class Agent {
 
     private readonly llm: LlmClient;
-    private readonly tools: Tool[];
-    private readonly maxTurns = 10;
+    private readonly maxTurns: number;
     private readonly beforeToolCall?: BeforeToolCall;
     private readonly sessionStore: SessionStore;
-    private readonly systemPrompt: string;
+    private readonly transformContext?: TransformContext;
+    private readonly convertToLlm?: ConvertToLlm;
+    private readonly events = new AgentEventBus();
+    private readonly _state: AgentState;
 
-    constructor(llm: LlmClient, tools: Tool[], beforeToolCall: BeforeToolCall, sessionStore: SessionStore, systemPrompt = "",) {
-        this.llm = llm;
-        this.tools = tools;
-        this.beforeToolCall = beforeToolCall;
-        this.sessionStore = sessionStore;
-        this.systemPrompt = systemPrompt;
+    constructor(options: AgentOptions) {
+        this.llm = options.llm;
+        this.sessionStore = options.sessionStore;
+        this.beforeToolCall = options.beforeToolCall;
+        this.maxTurns = options.maxTurns ?? 10;
+        this.transformContext = options.transformContext;
+        this.convertToLlm = options.convertToLlm;
+        this._state = createAgentState({
+            systemPrompt: options.systemPrompt ?? "",
+            tools: options.tools,
+            messages: options.initialMessages ?? [],
+        });
+    }
+
+
+
+    get state(): AgentState {
+        return this._state;
+    }
+
+    subscribe(listener: AgentEventListener): () => void {
+        return this.events.subscribe(listener);
     }
 
     async prompt(text: string): Promise<AgentMessage[]> {
-        // 不再从空数组开始，而是恢复当前 Session 的历史。
-        const messages = await this.sessionStore.getMessages();
-
-        const userMessage: AgentMessage = {
-            role: "user",
-            content: text,
-        };
-
-        messages.push(userMessage);
-
-        // user 消息形成后立即保存。
-        await this.sessionStore.appendMessage(userMessage);
-
-        let step = 0;
-        while (true) {
-            step++;
-            if (step > this.maxTurns) {
-                throw new Error("工具调用轮数超限。")
-            }
-
-            const reply = await this.llm.chatStream(
-                messages,
-                this.tools,
-                (text) => process.stdout.write(text),
-                {
-                    systemPrompt: this.systemPrompt,
+        const result = await runAgentLoop(
+            [{role: "user", content: text}],
+            this._state,
+            {
+                llm: this.llm,
+                maxTurns: this.maxTurns,
+                beforeToolCall: this.beforeToolCall,
+                transformContext: this.transformContext,
+                convertToLlm: this.convertToLlm,
+                emit: async (event) => {
+                    this.applyEvent(event);
+                    // Task 6 会把 Session 保存提取成独立订阅器；在此之前保持现有持久化行为。
+                    if (event.type === "message_end") {
+                        await this.sessionStore.appendMessage(event.message);
+                    }
+                    await this.events.emit(event);
                 },
-            );
+            },
+        );
 
-            messages.push(reply);
+        return [...this._state.messages];
+    }
 
-            // 流结束后才保存完整 assistant 消息。
-            // text_delta 阶段不落库。
-            await this.sessionStore.appendMessage(reply);
-
-            if (!reply.toolCalls?.length) {
-                if (reply.content) {
-                    process.stdout.write("\n");   // 文本已经实时打过了，这里只补个换行
-                }
-                return messages;
-            }
-
-            const {contexts, results} = await executeTools(this.tools, reply, this.beforeToolCall);
-            messages.push(...results);
-
-            // 每条 toolResult 都是完整 AgentMessage，需要进入 Session。
-            for (const result of results) {
-                await this.sessionStore.appendMessage(result);
-            }
-
-            console.log("工具执行状态：", contexts.map((c) => `${c.name}:${c.state}`));
-
-            process.stdout.write("\n");
-
-
+    private applyEvent(event: AgentEvent): void {
+        if (event.type === "agent_start") {
+            this._state.isRunning = true;
+            this._state.errorMessage = undefined;
+            return;
         }
 
+        if (
+            event.type === "message_start" &&
+            event.message.role === "assistant"
+        ) {
+            this._state.streamingMessage = event.message;
+            return;
+        }
+
+        if (event.type === "message_update") {
+            this._state.streamingMessage = event.message;
+            return;
+        }
+
+        if (
+            event.type === "message_end" &&
+            event.message.role === "assistant"
+        ) {
+            this._state.streamingMessage = undefined;
+            return;
+        }
+
+        if (event.type === "tool_execution_start") {
+            this._state.pendingToolCalls = new Set([
+                ...this._state.pendingToolCalls,
+                event.toolCallId,
+            ]);
+            return;
+        }
+
+        if (event.type === "tool_execution_end") {
+            const pending = new Set(this._state.pendingToolCalls);
+            pending.delete(event.toolCallId);
+            this._state.pendingToolCalls = pending;
+            return;
+        }
+
+        if (event.type === "agent_end") {
+            this._state.isRunning = false;
+            this._state.streamingMessage = undefined;
+            this._state.pendingToolCalls = new Set<string>();
+        }
     }
 
 }

@@ -1,10 +1,23 @@
-import type {AssistantMessage, BeforeToolCall, Tool, ToolResultMessage, ToolRunContext} from "./types.ts";
+import type {
+    AssistantMessage,
+    BeforeToolCall,
+    Tool,
+    ToolExecutionResult,
+    ToolResultMessage,
+    ToolRunContext,
+} from "./types.ts";
+import type {AgentEventListener} from "./agent-events.ts";
+
+export type ExecuteToolsOptions = {
+    beforeToolCall?: BeforeToolCall;
+    emit?: AgentEventListener;
+};
 
 
 export async function executeTools(
     tools: Tool[],
     message: AssistantMessage,
-    beforeToolCall?: BeforeToolCall
+    options: ExecuteToolsOptions = {},
 ): Promise<{ contexts: ToolRunContext[]; results: ToolResultMessage[] }> {
     const results: ToolResultMessage[] = [];
     const contexts: ToolRunContext[] = [];
@@ -24,6 +37,12 @@ export async function executeTools(
             input: toolCall.arguments
         };
 
+        await options.emit?.({
+            type: "tool_execution_start",
+            toolCallId: toolCall.id,
+            toolName: toolCall.name,
+            args: toolCall.arguments,
+        });
 
         let content: string;
         let isError: boolean;
@@ -37,7 +56,7 @@ export async function executeTools(
             isError = true;
         } else {
             try {
-                const decision = await beforeToolCall?.(toolCall);
+                const decision = await options.beforeToolCall?.(toolCall);
                 if (decision?.block) {
                     toolRun.state = "error";
                     toolRun.error = decision.reason ?? "该工具被拦截。";
@@ -45,6 +64,7 @@ export async function executeTools(
                     isError = true;
 
                 } else {
+
                     const output = await tool.execute(toolCall.arguments);
 
                     content = output.content;
@@ -53,10 +73,11 @@ export async function executeTools(
 
                     toolRun.state = "done";
                     toolRun.output = output.content;
+
                 }
 
-
-            } catch (error) {
+            } catch
+                (error) {
                 toolRun.state = "error";
                 toolRun.error = error instanceof Error ? error.message : String(error);
                 content = `工具执行失败: ${toolRun.error}`;
@@ -66,6 +87,18 @@ export async function executeTools(
         }
         toolRun.finishedAt = Date.now();
         contexts.push(toolRun);
+
+        const executionResult: ToolExecutionResult = details === undefined
+            ? {content}
+            : {content, details};
+
+        await options.emit?.({
+            type: "tool_execution_end",
+            toolCallId: toolCall.id,
+            toolName: toolCall.name,
+            result: executionResult,
+            isError,
+        });
 
         results.push({
             role: "toolResult",

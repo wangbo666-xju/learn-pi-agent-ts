@@ -47,20 +47,39 @@ const policy = createToolPolicy(async (toolCall) => {
     return true;
 });
 
-function createAgent(sessionStore: SessionStore): Agent {
-    const llm = new RealLlmClient();
+async function createAgent(
+    sessionStore: SessionStore,
+): Promise<Agent> {
+    const initialMessages = await sessionStore.getMessages();
 
-    return new Agent(
-        llm,
-        [
+    const agent = new Agent({
+        llm: new RealLlmClient(),
+        tools: [
             new ReadFileTool(cwd),
             new WriteFileTool(cwd),
             new ListDirTool(cwd),
         ],
-        policy,
+        beforeToolCall: policy,
         sessionStore,
         systemPrompt,
-    );
+        initialMessages,
+    });
+
+    agent.subscribe((event) => {
+        if (
+            event.type === "message_update" &&
+            event.update.type === "text_delta"
+        ) {
+            stdout.write(event.update.delta);
+        }
+
+        if (event.type === "tool_execution_end") {
+            const state = event.isError ? "error" : "done";
+            console.log(`\n工具执行状态：${event.toolName}:${state}`);
+        }
+    });
+
+    return agent;
 }
 
 function printHelp(): void {
@@ -77,8 +96,7 @@ function printHelp(): void {
 }
 
 let sessionStore = await sessionManager.create();
-let agent = createAgent(sessionStore);
-
+let agent = await createAgent(sessionStore);
 
 const metadata = await sessionStore.getMetadata();
 console.log(`已创建会话：${metadata.id}`);
@@ -110,7 +128,7 @@ try {
 
         if (command.type === "new") {
             sessionStore = await sessionManager.create();
-            agent = createAgent(sessionStore);
+            agent = await createAgent(sessionStore);
 
             const newMetadata = await sessionStore.getMetadata();
             console.log(`已创建会话：${newMetadata.id}`);
@@ -139,7 +157,7 @@ try {
 
             try {
                 sessionStore = await sessionManager.open(command.sessionId);
-                agent = createAgent(sessionStore);
+                agent = await createAgent(sessionStore);
                 console.log(`已恢复会话：${command.sessionId}`);
 
             } catch (error) {

@@ -48,7 +48,12 @@ test("模型直接回答时结束循环并返回本轮消息", async () => {
         id: "session-1",
         createdAt: 1000,
     });
-    const agent = new Agent(llm, [], allowAll, sessionStore);
+    const agent = new Agent({
+        llm,
+        tools: [],
+        beforeToolCall: allowAll,
+        sessionStore,
+    });
 
     const messages = await agent.prompt("你好");
 
@@ -78,7 +83,12 @@ test("模型调用工具后把工具结果加入上下文并继续请求模型",
         id: "session-1",
         createdAt: 1000,
     });
-    const agent = new Agent(llm, [tool], allowAll, sessionStore);
+    const agent = new Agent({
+        llm,
+        tools: [tool],
+        beforeToolCall: allowAll,
+        sessionStore,
+    });
 
     const messages = await agent.prompt("调用 echo");
 
@@ -116,7 +126,12 @@ test("工具抛出异常时把错误作为 toolResult 回传给模型", async ()
     });
 
 
-    const agent = new Agent(llm, [new TestTool("boom")], allowAll, sessionStore);
+    const agent = new Agent({
+        llm,
+        tools: [new TestTool("boom")],
+        beforeToolCall: allowAll,
+        sessionStore,
+    });
 
     const messages = await agent.prompt("执行一个失败工具");
 
@@ -150,7 +165,12 @@ test("beforeToolCall 拦截时不执行工具并把拒绝原因回传给模型",
         id: "session-1",
         createdAt: 1000,
     });
-    const agent = new Agent(llm, [tool], blockAll, sessionStore);
+    const agent = new Agent({
+        llm,
+        tools: [tool],
+        beforeToolCall: blockAll,
+        sessionStore,
+    });
 
     const messages = await agent.prompt("调用被禁止的工具");
 
@@ -181,12 +201,12 @@ test("连续调用 prompt 时会携带 Session 中的历史消息", async () => 
         createdAt: 1000,
     });
 
-    const agent = new Agent(
+    const agent = new Agent({
         llm,
-        [],
-        allowAll,
+        tools: [],
+        beforeToolCall: allowAll,
         sessionStore,
-    );
+    });
 
     await agent.prompt("第一次提问");
     await agent.prompt("第二次提问");
