@@ -50,6 +50,7 @@ export interface LlmClient {
 
 export type LlmRequestOptions = {
     systemPrompt?: string;
+    signal?: AbortSignal;
 };
 
 

@@ -10,7 +10,7 @@ import type {
     AssistantMessage,
     BeforeToolCall,
     LlmClient,
-    Tool,
+    Tool, ToolResultMessage, UserMessage,
 } from "./types.ts";
 import {executeTools} from "./execute-tools.ts";
 
@@ -36,6 +36,18 @@ export type AgentLoopConfig = {
     beforeToolCall?: BeforeToolCall;
     transformContext?: TransformContext;
     convertToLlm?: ConvertToLlm;
+    signal?: AbortSignal;
+    pollSteering?: () => UserMessage[];
+    pollFollowUp?: () => UserMessage[];
+    shouldStopAfterTurn?: (
+        input: {
+            message: AssistantMessage;
+            toolResults: ToolResultMessage[];
+            context: AgentContext;
+            newMessages: AgentMessage[];
+        },
+        signal?: AbortSignal,
+    ) => boolean | Promise<boolean>;
 };
 
 
@@ -48,6 +60,7 @@ export async function runAgentLoop(
     const emit = config.emit;
     let finalMessage: AssistantMessage | undefined;
     let agentEnded = false;
+    let turn = 0;
 
     async function emitAgentEnd(reason: AgentStopReason): Promise<void> {
         if (agentEnded) return;
@@ -62,85 +75,157 @@ export async function runAgentLoop(
         return result;
     }
 
-    try {
-        // 整个生命周期都必须在 try 内。message_end 持久化失败时仍要进入错误收尾。
-        await emit({type: "agent_start"});
-
-        for (const message of initialMessages) {
+    /** 完整的 user/toolResult 消息统一按此顺序追加并通知保存。 */
+    async function appendAndEmitMessages(messages: AgentMessage[]): Promise<void> {
+        for (const message of messages) {
             await emit({type: "message_start", message});
             context.messages.push(message);
             newMessages.push(message);
             await emit({type: "message_end", message});
         }
+    }
 
-        for (let turn = 1; turn <= config.maxTurns; turn++) {
-            await emit({type: "turn_start", turn});
+    /** 一轮 = 请求一次模型 + 执行其返回的整批工具 + 发布 turn_end。 */
+    async function runTurn(): Promise<{
+        reply: AssistantMessage;
+        toolResults: ToolResultMessage[];
+    }> {
+        await emit({type: "turn_start", turn});
+        config.signal?.throwIfAborted();
 
-            const llmMessages = await prepareLlmContext(
-                context.messages,
-                config.transformContext ?? identityTransformContext,
-                config.convertToLlm ?? defaultConvertToLlm,
-            );
+        const llmMessages = await prepareLlmContext(
+            context.messages,
+            config.transformContext ?? identityTransformContext,
+            config.convertToLlm ?? defaultConvertToLlm,
+            config.signal,
+        );
+        config.signal?.throwIfAborted();
 
-            let assistantWasAdded = false;
-            const reply = await config.llm.chatStream(
-                llmMessages,
-                context.tools,
-                async (event) => {
-                    if (event.type === "start") {
-                        await emit({type: "message_start", message: event.partial});
-                    } else if (event.type === "text_delta") {
-                        await emit({
-                            type: "message_update",
-                            message: event.partial,
-                            update: {type: "text_delta", delta: event.delta},
-                        });
-                    } else if (event.type === "toolcall_delta") {
-                        await emit({
-                            type: "message_update",
-                            message: event.partial,
-                            update: {type: "toolcall_delta"},
-                        });
-                    } else {
-                        context.messages.push(event.message);
-                        newMessages.push(event.message);
-                        assistantWasAdded = true;
-                        await emit({type: "message_end", message: event.message});
-                    }
-                },
-                {systemPrompt: context.systemPrompt},
-            );
+        let assistantWasAdded = false;
+        const reply = await config.llm.chatStream(
+            llmMessages,
+            context.tools,
+            async (event) => {
+                config.signal?.throwIfAborted();
 
-            if (!assistantWasAdded) {
-                context.messages.push(reply);
-                newMessages.push(reply);
-                await emit({type: "message_end", message: reply});
-            }
+                if (event.type === "start") {
+                    await emit({type: "message_start", message: event.partial});
+                } else if (event.type === "text_delta") {
+                    await emit({
+                        type: "message_update",
+                        message: event.partial,
+                        update: {type: "text_delta", delta: event.delta},
+                    });
+                } else if (event.type === "toolcall_delta") {
+                    await emit({
+                        type: "message_update",
+                        message: event.partial,
+                        update: {type: "toolcall_delta"},
+                    });
+                } else if (event.type === "done") {
+                    context.messages.push(event.message);
+                    newMessages.push(event.message);
+                    assistantWasAdded = true;
+                    await emit({type: "message_end", message: event.message});
+                }
+            },
+            {
+                systemPrompt: context.systemPrompt,
+                signal: config.signal,
+            },
+        );
 
-            finalMessage = reply;
-            const {results} = await executeTools(
-                context.tools,
-                reply,
-                {
-                    beforeToolCall: config.beforeToolCall,
-                    emit,
-                },
-            );
+        // 保留 Task 3 的兼容路径：某个 LLM 只返回结果而未发布 done 时仍追加一次。
+        if (!assistantWasAdded) {
+            config.signal?.throwIfAborted();
+            context.messages.push(reply);
+            newMessages.push(reply);
+            await emit({type: "message_end", message: reply});
+        }
+        finalMessage = reply;
 
-            for (const result of results) {
-                await emit({type: "message_start", message: result});
-                context.messages.push(result);
-                newMessages.push(result);
-                await emit({type: "message_end", message: result});
-            }
+        // Task 4 的工具尚未接收 signal。
+        // assistant 工具调用已入历史后，完成整批工具结果，再在 Turn 边界响应取消。
+        const {results} = await executeTools(context.tools, reply, {
+            beforeToolCall: config.beforeToolCall,
+            emit,
+        });
 
-            await emit({type: "turn_end", turn, message: reply, toolResults: results});
+        await appendAndEmitMessages(results);
+        await emit({
+            type: "turn_end",
+            turn,
+            message: reply,
+            toolResults: results,
+        });
+        return {reply, toolResults: results};
 
-            if (results.length === 0) return finish("completed");
+
+    }
+
+    try {
+        // 整个生命周期都必须在 try 内。message_end 持久化失败时仍要进入错误收尾。
+        await emit({type: "agent_start"});
+        config.signal?.throwIfAborted();
+        if (!Number.isInteger(config.maxTurns) || config.maxTurns < 1) {
+            throw new Error("maxTurns 必须是正整数");
         }
 
-        return finish("max_turns");
+        let pendingMessages = [...initialMessages];
+
+        // 外层负责初始输入，以及当前任务完成后的 followUp。
+        // 必须 do/while：continue() 传 [] 时也需要执行第一次模型请求。
+        do {
+            config.signal?.throwIfAborted();
+
+            await appendAndEmitMessages(pendingMessages);
+            pendingMessages = [];
+
+            while (true) {
+                turn++;
+                if (turn > config.maxTurns) return finish("max_turns");
+
+                const {reply, toolResults} = await runTurn();
+                config.signal?.throwIfAborted();
+
+
+                const shouldStop = await config.shouldStopAfterTurn?.({
+                    message: reply,
+                    toolResults,
+                    context,
+                    newMessages,
+                }, config.signal);
+                config.signal?.throwIfAborted();
+                if (shouldStop) return await finish("terminated");
+
+
+                // 用完预算且仍需要继续时，不能取走队列消息却不处理。
+                if (turn >= config.maxTurns) {
+                    // 无工具且没有队列时，第 N 轮直接回答仍属于正常完成。
+                    // 是否有队列由下面轮询确定；轮询得到的消息会先记录再结束。
+                    if (toolResults.length > 0) return await finish("max_turns");
+                }
+
+                const steering = config.pollSteering?.() ?? [];
+                if (steering.length > 0) {
+                    await appendAndEmitMessages(steering);
+                    continue;
+                }
+                if (toolResults.length > 0) {
+                    continue;
+                }
+
+                break;
+
+            }
+            pendingMessages = config.pollFollowUp?.() ?? [];
+
+        } while (pendingMessages.length > 0);
+        return await finish("completed");
     } catch (error) {
+        // 已尝试发布 agent_end 后，监听器异常仍向上传播，不能伪装成取消成功。
+        if (agentEnded) throw error;
+        if (config.signal?.aborted) return await finish("aborted");
         await emitAgentEnd("error");
         throw error;
     }

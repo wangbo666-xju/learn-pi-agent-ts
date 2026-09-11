@@ -77,6 +77,7 @@ export class RealLlmClient implements LlmClient {
                 tools: toApiTools(tools),
                 tool_choice: "auto",
             }),
+            signal: options?.signal,
         });
 
         if (!response.ok) {
@@ -126,6 +127,7 @@ export class RealLlmClient implements LlmClient {
                 tool_choice: "auto"
 
             }),
+            signal: options?.signal,
         });
         if (!response.ok) {
             throw new Error(`模型请求失败：${response.status} ${await response.text()}`);
