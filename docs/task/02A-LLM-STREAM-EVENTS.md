@@ -322,3 +322,18 @@ npm run check
 ```text
 refactor(agent): emit semantic llm stream events
 ```
+
+## 通俗说明
+
+网络层收到的是不完整 SSE 数据块，例如先收到 `Hel`，再收到 `lo`。这一任务把这些原始块整理成 Agent 能理解的事件：
+
+```text
+start
+→ text_delta("Hel")
+→ text_delta("lo")
+→ done("Hello")
+```
+
+工具参数也可能分成多段，而且中途还不是合法 JSON，所以 `toolcall_delta` 只表示“工具调用还在变化”；只有 `done.message` 才是可以执行的完整 assistant 消息。
+
+完成后，模型层不再直接打印终端。调试时重点看 `readSseChunks()` 如何拆帧，以及 `RealLlmClient.chatStream()` 如何累积 `content` 和工具参数。

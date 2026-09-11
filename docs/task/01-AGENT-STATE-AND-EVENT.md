@@ -430,3 +430,11 @@ AgentEventBus
 ```text
 feat(agent): 增加 AgentState 与生命周期事件协议
 ```
+
+## 通俗说明
+
+`AgentState` 是 Agent 当前情况的“仪表盘”，例如是否正在运行、已经有哪些完整消息、当前流式消息输出到哪里、哪些工具还没结束。
+
+`AgentEvent` 是 Agent 对外发出的“通知”。例如模型开始回答时发 `message_start`，文本变化时发 `message_update`，完整回答形成后发 `message_end`。CLI、Session 等模块订阅这些事件，不需要侵入 Agent Loop。
+
+最重要的区别是：State 表示“现在是什么状态”，Event 表示“刚刚发生了什么”。建议在 `createAgentState()` 和 `AgentEventBus.emit()` 的循环中打断点观察。

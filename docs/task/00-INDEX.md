@@ -58,3 +58,9 @@ prompt → 流式事件 → tool calling → toolResult → 最终回答
 完整消息自动进入 JSONL Session
 Skill 自动索引和显式调用保持可用
 ```
+
+## 通俗说明
+
+这份索引相当于项目的施工导航，不需要一次看完所有文档。Task 1 是地基；Task 2A 和 2B 分别整理模型输出与模型输入；Task 3 再把它们接入 Loop；Task 4-7 逐步补上运行控制、工具、Session 和 CLI。
+
+当前 Task 1 已完成，下一步从 Task 2A 开始。每完成一项，先跑该文档的局部测试，再跑 `npm test` 和 `npm run check`，最后更新这里的状态。

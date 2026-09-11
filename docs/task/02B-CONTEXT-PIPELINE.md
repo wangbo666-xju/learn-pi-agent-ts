@@ -154,3 +154,16 @@ npm run check
 ```text
 feat(agent): add context transformation pipeline
 ```
+
+## 通俗说明
+
+`AgentState.messages` 是 Agent 自己保存的完整历史，但这些内容不一定都适合直接发给模型。因此发送请求前分两步处理：
+
+```text
+完整历史
+→ transformContext：裁剪、摘要或注入上下文
+→ convertToLlm：只留下模型支持的消息类型
+→ LlmClient
+```
+
+当前默认实现几乎不改变数据，价值在于提前留下 Compact、图片消息和应用内部消息的扩展位置。调试时在 `prepareLlmContext()` 打断点，对比输入、`transformed` 和最终返回值。

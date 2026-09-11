@@ -194,7 +194,7 @@ export async function runAgentLoop(
 
     async function finish(reason: AgentStopReason): Promise<AgentRunResult> {
         const result: AgentRunResult = {newMessages, finalMessage, reason};
-        await emitAgentEnd(reason);
+            await emitAgentEnd(reason);
         return result;
     }
 
@@ -460,3 +460,23 @@ npm run check
 ```text
 refactor(agent): extract event-driven agent loop
 ```
+
+## 通俗说明
+
+这一任务把原来堆在 `Agent.prompt()` 里的执行流程拆成两部分：`Agent` 负责控制和保存状态，`runAgentLoop()` 负责真正干活。
+
+一次普通执行大致是：
+
+```text
+user message_end
+→ 请求模型
+→ assistant message_update 多次
+→ assistant message_end
+→ 如果有工具则执行并产生 toolResult
+→ 再请求模型
+→ agent_end
+```
+
+完整消息由 Loop 加入 `context.messages`；事件只负责通知 State、CLI 和 Session。所有退出路径都必须经过唯一的 `emitAgentEnd()`，否则异常时容易残留 `isRunning=true`。
+
+建议先在 `runAgentLoop()` 的 Turn 开始处打断点，再在 `emit()` 和 `applyEvent()` 打断点，观察同一条消息怎样从模型结果进入 State 并通知外部模块。
