@@ -55,7 +55,11 @@ test("模型直接回答时结束循环并返回本轮消息", async () => {
         sessionStore,
     });
 
-    const messages = await agent.prompt("你好");
+    const result = await agent.prompt("你好");
+    assert.equal(result.reason, "completed");
+    const messages = agent.state.messages;
+    assert.deepEqual(result.newMessages, messages);
+    assert.equal(result.finalMessage?.content, "直接回答");
 
     assert.deepEqual(messages, [
         {role: "user", content: "你好"},
@@ -90,7 +94,9 @@ test("模型调用工具后把工具结果加入上下文并继续请求模型",
         sessionStore,
     });
 
-    const messages = await agent.prompt("调用 echo");
+    const result = await agent.prompt("调用 echo");
+    assert.equal(result.reason, "completed");
+    const messages = agent.state.messages;
 
     assert.deepEqual(messages.map((message) => message.role), [
         "user",
@@ -133,7 +139,9 @@ test("工具抛出异常时把错误作为 toolResult 回传给模型", async ()
         sessionStore,
     });
 
-    const messages = await agent.prompt("执行一个失败工具");
+    const result = await agent.prompt("执行一个失败工具");
+    assert.equal(result.reason, "completed");
+    const messages = agent.state.messages;
 
     assert.deepEqual(messages[2], {
         role: "toolResult",
@@ -172,7 +180,9 @@ test("beforeToolCall 拦截时不执行工具并把拒绝原因回传给模型",
         sessionStore,
     });
 
-    const messages = await agent.prompt("调用被禁止的工具");
+    const result = await agent.prompt("调用被禁止的工具");
+    assert.equal(result.reason, "completed");
+    const messages = agent.state.messages;
 
     assert.equal(tool.inputs.length, 0);
     assert.deepEqual(messages[2], {

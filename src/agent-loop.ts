@@ -182,10 +182,14 @@ export async function runAgentLoop(
             pendingMessages = [];
 
             while (true) {
+                config.signal?.throwIfAborted();
+                if (turn >= config.maxTurns) {
+                    return await finish("max_turns");
+                }
                 turn++;
-                if (turn > config.maxTurns) return finish("max_turns");
-
+                //LLM交互
                 const {reply, toolResults} = await runTurn();
+
                 config.signal?.throwIfAborted();
 
 
