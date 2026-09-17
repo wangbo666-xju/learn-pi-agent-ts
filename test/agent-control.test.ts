@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import Agent from "../src/agent.ts";
+import {createTestAgent} from "./helpers/create-test-agent.ts";
 import type {AgentEvent} from "../src/agent-events.ts";
 import {FakeLlmClient} from "../src/fake-llm.ts";
 import {MemorySessionStore} from "../src/session/memory-session-store.ts";
@@ -54,7 +54,7 @@ class BlockingLlm implements LlmClient {
 
 test("运行锁立即生效，取消后清理 partial，waitForIdle 等到收尾", async () => {
     const store = createStore();
-    const agent = new Agent({llm: new BlockingLlm(), tools: [], sessionStore: store});
+    const agent = createTestAgent({llm: new BlockingLlm(), tools: [], sessionStore: store});
     const events: AgentEvent[] = [];
     let idleCompleted = false;
     agent.subscribe((event) => {
@@ -85,7 +85,7 @@ test("运行锁立即生效，取消后清理 partial，waitForIdle 等到收尾
 test("失败后 waitForIdle 不抛错，并可 continue 恢复", async () => {
     const llm = new FakeLlmClient([{role: "assistant", content: "恢复成功"}]);
     let fail = true;
-    const agent = new Agent({
+    const agent = createTestAgent({
         llm, tools: [], sessionStore: createStore(),
         transformContext: async (messages) => {
             if (fail) {
@@ -120,7 +120,7 @@ test("steer 优先于工具后续请求，followUp 等当前任务结束", async
         parameters: {type: "object", properties: {}},
         async execute() { return {content: "工具结果"}; },
     };
-    const agent = new Agent({llm, tools: [tool], sessionStore: createStore()});
+    const agent = createTestAgent({llm, tools: [tool], sessionStore: createStore()});
     agent.subscribe((event) => {
         if (event.type === "turn_end" && event.turn === 1) {
             agent.followUp({role: "user", content: "最后总结"});
@@ -139,7 +139,7 @@ test("steer 优先于工具后续请求，followUp 等当前任务结束", async
 
 test("shouldStopAfterTurn 优先于待处理队列", async () => {
     const llm = new FakeLlmClient([{role: "assistant", content: "回答"}]);
-    const agent = new Agent({
+    const agent = createTestAgent({
         llm, tools: [], sessionStore: createStore(),
         shouldStopAfterTurn: () => true,
     });
@@ -152,7 +152,7 @@ test("shouldStopAfterTurn 优先于待处理队列", async () => {
 });
 
 test("最后一轮直接回答属于 completed", async () => {
-    const agent = new Agent({
+    const agent = createTestAgent({
         llm: new FakeLlmClient([{role: "assistant", content: "回答"}]),
         tools: [], sessionStore: createStore(), maxTurns: 1,
     });
@@ -167,7 +167,7 @@ test("轮数耗尽后从 toolResult 继续，新的 Run 使用新的预算", asy
         },
         {role: "assistant", content: "解释工具错误"},
     ]);
-    const agent = new Agent({llm, tools: [], sessionStore: createStore(), maxTurns: 1});
+    const agent = createTestAgent({llm, tools: [], sessionStore: createStore(), maxTurns: 1});
     const first = await agent.prompt("开始");
     assert.equal(first.reason, "max_turns");
     assert.equal(agent.state.messages.at(-1)?.role, "toolResult");
@@ -177,7 +177,7 @@ test("轮数耗尽后从 toolResult 继续，新的 Run 使用新的预算", asy
 });
 
 test("空历史和无队列的 assistant 不能 continue", async () => {
-    const agent = new Agent({
+    const agent = createTestAgent({
         llm: new FakeLlmClient([{role: "assistant", content: "回答"}]),
         tools: [], sessionStore: createStore(),
     });
@@ -192,7 +192,7 @@ for (const queue of ["steer", "followUp"] as const) {
             {role: "assistant", content: "第一次"},
             {role: "assistant", content: "第二次"},
         ]);
-        const agent = new Agent({llm, tools: [], sessionStore: createStore()});
+        const agent = createTestAgent({llm, tools: [], sessionStore: createStore()});
         await agent.prompt("开始");
         agent[queue]({role: "user", content: "继续要求"});
         const result = await agent.continue();
@@ -202,7 +202,7 @@ for (const queue of ["steer", "followUp"] as const) {
 }
 
 test("message_end 订阅者失败仍结束且只发布一次 agent_end", async () => {
-    const agent = new Agent({
+    const agent = createTestAgent({
         llm: new FakeLlmClient([]), tools: [], sessionStore: createStore(),
     });
     let ends = 0;
@@ -218,7 +218,7 @@ test("message_end 订阅者失败仍结束且只发布一次 agent_end", async (
 
 test("reset 清空内存与队列，但不删除 Store 的历史", async () => {
     const store = createStore();
-    const agent = new Agent({
+    const agent = createTestAgent({
         llm: new FakeLlmClient([{role: "assistant", content: "回答"}]),
         tools: [], sessionStore: store,
     });
@@ -237,7 +237,7 @@ test("reset 清空内存与队列，但不删除 Store 的历史", async () => {
 test("预算耗尽后注入 steer 时取消，应优先返回 aborted", async () => {
     const llm = new FakeLlmClient([{role: "assistant", content: "第一轮完成"}]);
     const store = createStore();
-    const agent = new Agent({llm, tools: [], sessionStore: store, maxTurns: 1});
+    const agent = createTestAgent({llm, tools: [], sessionStore: store, maxTurns: 1});
     const events: AgentEvent[] = [];
 
     agent.steer({role: "user", content: "改变方向"});

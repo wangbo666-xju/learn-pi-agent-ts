@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx src/main.ts",
-    "test": "tsx --test test/agent.test.ts test/agent-loop.test.ts test/memory-session-store.test.ts test/jsonl-session-store.test.ts test/session-manager.test.ts test/skills.test.ts test/real-llm.test.ts test/cli-agent-runner.test.ts test/agent-state.test.ts test/agent-events.test.ts test/execute-tools.test.ts test/agent-control.test.ts test/message-queue.test.ts test/context.test.ts test/real-llm-stream-boundary.test.ts",
+    "test": "tsx --test test/agent.test.ts test/agent-loop.test.ts test/memory-session-store.test.ts test/jsonl-session-store.test.ts test/session-manager.test.ts test/skills.test.ts test/real-llm.test.ts test/cli-agent-runner.test.ts test/agent-state.test.ts test/agent-events.test.ts test/execute-tools.test.ts test/agent-control.test.ts test/message-queue.test.ts test/context.test.ts test/real-llm-stream-boundary.test.ts test/session-event-listener.test.ts",
     "check": "tsc --noEmit"
   },
   "devDependencies": {

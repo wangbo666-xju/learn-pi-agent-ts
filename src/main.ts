@@ -16,6 +16,8 @@ import {formatSkillInvocation} from "./skills/skill-invocation.ts";
 import {formatSkillsForSystemPrompt} from "./skills/system-prompt.ts";
 import {dirname, resolve} from "node:path";
 import {fileURLToPath} from "node:url";
+import {createSessionAgent} from "./session/create-session-agent.ts";
+
 
 // main.ts 位于 <项目根目录>/src/，因此向上一层得到项目根目录。
 // 不依赖 IDEA 的 Working directory。
@@ -47,12 +49,8 @@ const policy = createToolPolicy(async (toolCall) => {
     return true;
 });
 
-async function createAgent(
-    sessionStore: SessionStore,
-): Promise<Agent> {
-    const initialMessages = await sessionStore.getMessages();
-
-    const agent = new Agent({
+async function createAgent(sessionStore: SessionStore): Promise<Agent> {
+    const agent = await createSessionAgent(sessionStore, {
         llm: new RealLlmClient(),
         tools: [
             new ReadFileTool(cwd),
@@ -60,25 +58,19 @@ async function createAgent(
             new ListDirTool(cwd),
         ],
         beforeToolCall: policy,
-        sessionStore,
         systemPrompt,
-        initialMessages,
     });
 
+    // 工厂已注册持久化；此处只注册显示，不再注册第二个存储监听器。
     agent.subscribe((event) => {
-        if (
-            event.type === "message_update" &&
-            event.update.type === "text_delta"
-        ) {
+        if (event.type === "message_update" && event.update.type === "text_delta") {
             stdout.write(event.update.delta);
         }
-
         if (event.type === "tool_execution_end") {
             const state = event.isError ? "error" : "done";
-            console.log(`\n工具执行状态：${event.toolName}:${state}`);
+            console.log("\n工具执行状态：" + event.toolName + ":" + state);
         }
     });
-
     return agent;
 }
 

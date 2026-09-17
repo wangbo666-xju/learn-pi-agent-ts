@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import Agent from "../src/agent.ts";
+import {createTestAgent} from "./helpers/create-test-agent.ts";
 import {FakeLlmClient} from "../src/fake-llm.ts";
 import type {BeforeToolCall, Tool, ToolArguments, ToolExecutionResult} from "../src/types.ts";
 import {MemorySessionStore} from "../src/session/memory-session-store.ts";
@@ -48,7 +48,7 @@ test("模型直接回答时结束循环并返回本轮消息", async () => {
         id: "session-1",
         createdAt: 1000,
     });
-    const agent = new Agent({
+    const agent = createTestAgent({
         llm,
         tools: [],
         beforeToolCall: allowAll,
@@ -87,7 +87,7 @@ test("模型调用工具后把工具结果加入上下文并继续请求模型",
         id: "session-1",
         createdAt: 1000,
     });
-    const agent = new Agent({
+    const agent = createTestAgent({
         llm,
         tools: [tool],
         beforeToolCall: allowAll,
@@ -132,7 +132,7 @@ test("工具抛出异常时把错误作为 toolResult 回传给模型", async ()
     });
 
 
-    const agent = new Agent({
+    const agent = createTestAgent({
         llm,
         tools: [new TestTool("boom")],
         beforeToolCall: allowAll,
@@ -173,7 +173,7 @@ test("beforeToolCall 拦截时不执行工具并把拒绝原因回传给模型",
         id: "session-1",
         createdAt: 1000,
     });
-    const agent = new Agent({
+    const agent = createTestAgent({
         llm,
         tools: [tool],
         beforeToolCall: blockAll,
@@ -211,7 +211,7 @@ test("连续调用 prompt 时会携带 Session 中的历史消息", async () => 
         createdAt: 1000,
     });
 
-    const agent = new Agent({
+    const agent = createTestAgent({
         llm,
         tools: [],
         beforeToolCall: allowAll,

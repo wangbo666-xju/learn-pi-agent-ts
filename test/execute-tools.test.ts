@@ -4,7 +4,7 @@ import {executeTools} from "../src/execute-tools.ts";
 import {validateToolArguments} from "../src/tool-arguments.ts";
 import type {AgentEvent} from "../src/agent-events.ts";
 import type {AssistantMessage, Tool} from "../src/types.ts";
-import Agent from "../src/agent.ts";
+import {createTestAgent} from "./helpers/create-test-agent.ts";
 import {FakeLlmClient} from "../src/fake-llm.ts";
 import {MemorySessionStore} from "../src/session/memory-session-store.ts";
 
@@ -154,7 +154,7 @@ test("空批次和混合 terminate 批次不算全部终止", async () => {
 test("Agent 贯通 before terminate 和 after，不再自动请求第二次模型", async () => {
     for (const mode of ["before", "after"] as const) {
         const llm = new FakeLlmClient([reply]);
-        const agent = new Agent({
+        const agent = createTestAgent({
             llm,
             tools: [createTool()],
             sessionStore: new MemorySessionStore({id: mode, createdAt: 0}),

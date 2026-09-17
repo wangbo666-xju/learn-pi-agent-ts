@@ -19,12 +19,10 @@ import {
     type AgentRunResult,
 } from "./agent-loop.ts";
 import {MessageQueue} from "./message-queue.ts";
-import type {SessionStore} from "./session/session-store.ts";
 
 export type AgentOptions = {
     llm: LlmClient;
     tools: Tool[];
-    sessionStore: SessionStore;
     beforeToolCall?: BeforeToolCall;
     afterToolCall?: AfterToolCall;
     systemPrompt?: string;
@@ -40,7 +38,6 @@ class Agent {
     private readonly maxTurns: number;
     private readonly beforeToolCall?: BeforeToolCall;
     private readonly afterToolCall?: AfterToolCall;
-    private readonly sessionStore: SessionStore;
     private readonly transformContext?: TransformContext;
     private readonly convertToLlm?: ConvertToLlm;
     private readonly shouldStopAfterTurn?: AgentLoopConfig["shouldStopAfterTurn"];
@@ -55,7 +52,6 @@ class Agent {
 
     constructor(options: AgentOptions) {
         this.llm = options.llm;
-        this.sessionStore = options.sessionStore;
         this.beforeToolCall = options.beforeToolCall;
         this.afterToolCall = options.afterToolCall;
         this.maxTurns = options.maxTurns ?? 10;
@@ -185,10 +181,8 @@ class Agent {
     }
 
     private async handleEvent(event: AgentEvent): Promise<void> {
+        // Loop 负责历史消息；这里先更新实时 State，再通知外部订阅者。
         this.applyEvent(event);
-        if (event.type === "message_end") {
-            await this.sessionStore.appendMessage(event.message);
-        }
         await this.events.emit(event);
     }
 
