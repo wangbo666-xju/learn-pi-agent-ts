@@ -22,23 +22,17 @@ export class WriteFileTool implements Tool {
         additionalProperties: false,
     };
 
-    async execute(args: ToolArguments): Promise<ToolExecutionResult> {
+    async execute(args: ToolArguments, signal?: AbortSignal): Promise<ToolExecutionResult> {
+        signal?.throwIfAborted();
         const path = args.path;
         const content = args.content;
-
         if (typeof path !== "string" || typeof content !== "string") {
             throw new Error("write 工具需要字符串类型的 path 和 content 参数");
         }
-
-        const absolutePath = resolvePath(
-            this.workspaceRoot,
-            path,
-        );
-
-        await writeFile(absolutePath, content, "utf8");
-        return {
-            content: `已写入 ${path}（${content.length} 字符）`
-        }
+        const absolutePath = resolvePath(this.workspaceRoot, path);
+        await writeFile(absolutePath, content, {encoding: "utf8", signal});
+        signal?.throwIfAborted();
+        return {content: "已写入 " + path + "（" + content.length + " 字符）"};
     }
 
 }

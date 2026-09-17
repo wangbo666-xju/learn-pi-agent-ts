@@ -21,22 +21,21 @@ export class ListDirTool implements Tool {
         additionalProperties: false,
     };
 
-    async execute(args: ToolArguments): Promise<ToolExecutionResult> {
+    async execute(args: ToolArguments, signal?: AbortSignal): Promise<ToolExecutionResult> {
+        signal?.throwIfAborted();
+        if (args.path !== undefined && typeof args.path !== "string") {
+            throw new Error("listDir 的 path 必须是字符串");
+        }
         const path = typeof args.path === "string" ? args.path : ".";
-        const absolutePath = resolvePath(
-            this.workspaceRoot,
-            path,
-        );
+        const absolutePath = resolvePath(this.workspaceRoot, path);
         const entries = await readdir(absolutePath, {withFileTypes: true});
-
+        // readdir 没有在这里传 signal；只能在操作前后响应取消。
+        signal?.throwIfAborted();
         return {
-            content:
-                entries
-                    .map((e) => (e.isDirectory() ? `[dir] ${e.name}` : `     ${e.name}`))
-                    .join("\n") || "(空目录)"
+            content: entries.map((entry) =>
+                (entry.isDirectory() ? "[dir] " : "     ") + entry.name,
+            ).join("\n") || "(空目录)",
         };
-
-
     }
 
 }

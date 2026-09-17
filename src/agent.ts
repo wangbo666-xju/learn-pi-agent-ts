@@ -4,6 +4,7 @@ import type {
     LlmClient,
     Tool,
     UserMessage,
+    AfterToolCall
 } from "./types.ts";
 import type {ConvertToLlm, TransformContext} from "./context.ts";
 import {createAgentState, type AgentState} from "./agent-state.ts";
@@ -25,6 +26,7 @@ export type AgentOptions = {
     tools: Tool[];
     sessionStore: SessionStore;
     beforeToolCall?: BeforeToolCall;
+    afterToolCall?: AfterToolCall;
     systemPrompt?: string;
     initialMessages?: AgentMessage[];
     maxTurns?: number;
@@ -37,6 +39,7 @@ class Agent {
     private readonly llm: LlmClient;
     private readonly maxTurns: number;
     private readonly beforeToolCall?: BeforeToolCall;
+    private readonly afterToolCall?: AfterToolCall;
     private readonly sessionStore: SessionStore;
     private readonly transformContext?: TransformContext;
     private readonly convertToLlm?: ConvertToLlm;
@@ -54,6 +57,7 @@ class Agent {
         this.llm = options.llm;
         this.sessionStore = options.sessionStore;
         this.beforeToolCall = options.beforeToolCall;
+        this.afterToolCall = options.afterToolCall;
         this.maxTurns = options.maxTurns ?? 10;
         if (!Number.isInteger(this.maxTurns) || this.maxTurns < 1) {
             throw new Error("maxTurns 必须是正整数");
@@ -150,6 +154,7 @@ class Agent {
                 llm: this.llm,
                 maxTurns: this.maxTurns,
                 beforeToolCall: this.beforeToolCall,
+                afterToolCall: this.afterToolCall,
                 transformContext: this.transformContext,
                 convertToLlm: this.convertToLlm,
                 shouldStopAfterTurn: this.shouldStopAfterTurn,

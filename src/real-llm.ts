@@ -336,7 +336,9 @@ async function readSseChunks(
         }
 
         if (done) {
-            return;
+            // 网络 EOF 只表示连接结束，不代表模型正常完成。
+            // 当前适配器以 [DONE] 为流结束标志；缺失时不能发布完整消息或执行工具。
+            throw new Error("模型响应流提前结束：未收到 [DONE] 完成标志");
         }
     }
 

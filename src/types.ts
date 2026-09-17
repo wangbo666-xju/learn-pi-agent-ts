@@ -1,11 +1,4 @@
-export type ToolArguments = Record<string, unknown>;
-
-export type ToolCall = {
-    id: string;
-    name: string;
-    arguments: ToolArguments;
-};
-
+//------------------------message
 export type UserMessage = {
     role: "user";
     content: string;
@@ -17,12 +10,6 @@ export type AssistantMessage = {
     toolCalls?: ToolCall[];
 };
 
-export type ToolExecutionResult = {
-    content: string;
-    details?: unknown;
-    terminate?: boolean;
-};
-
 export type ToolResultMessage = {
     role: "toolResult";
     toolCallId: string;
@@ -31,8 +18,16 @@ export type ToolResultMessage = {
     details?: unknown;
 };
 
+export type ToolExecutionResult = {
+    content: string;
+    details?: unknown;
+    terminate?: boolean;
+};
+
+
 export type AgentMessage = UserMessage | AssistantMessage | ToolResultMessage;
 
+//------------------------llm
 export interface LlmClient {
     chat(
         messages: AgentMessage[],
@@ -77,13 +72,33 @@ export type LlmStreamListener = (
     event: LlmStreamEvent,
 ) => void | Promise<void>;
 
+
+
+//------------------------tool
+
 export interface Tool {
     name: string;
     description: string;
     parameters: Record<string, unknown>;
 
-    execute(args: ToolArguments): Promise<ToolExecutionResult>;
+    execute(
+        args: ToolArguments,
+        signal?: AbortSignal,
+        onUpdate?: ToolUpdateCallback,
+    ): Promise<ToolExecutionResult>;
 }
+
+export type ToolArguments = Record<string, unknown>;
+
+export type ToolCall = {
+    id: string;
+    name: string;
+    arguments: ToolArguments;
+};
+export type ToolUpdateCallback = (
+    partialResult: ToolExecutionResult,
+) => void | Promise<void>;
+
 
 export type ToolRunContext = {
     id: string;                       // 对应 toolCall.id
@@ -97,12 +112,24 @@ export type ToolRunContext = {
 };
 
 export type BeforeToolCallResult = {
-
     block: boolean;
     reason?: string;
+    terminate?: boolean;
+};
 
-}
 export type BeforeToolCall = (
     toolCall: ToolCall,
+    signal?: AbortSignal,
 ) => Promise<BeforeToolCallResult | undefined>;
 
+export type AfterToolCall = (
+    input: {
+        toolCall: ToolCall;
+        result: ToolExecutionResult;
+        isError: boolean;
+    },
+    signal?: AbortSignal,
+) => Promise<{
+    result?: ToolExecutionResult;
+    isError?: boolean;
+} | undefined>;

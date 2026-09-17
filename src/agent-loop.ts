@@ -6,6 +6,7 @@ import {
     prepareLlmContext,
 } from "./context.ts";
 import type {
+    AfterToolCall,
     AgentMessage,
     AssistantMessage,
     BeforeToolCall,
@@ -34,6 +35,7 @@ export type AgentLoopConfig = {
     maxTurns: number;
     emit: AgentEventListener;
     beforeToolCall?: BeforeToolCall;
+    afterToolCall?: AfterToolCall;
     transformContext?: TransformContext;
     convertToLlm?: ConvertToLlm;
     signal?: AbortSignal;
@@ -89,6 +91,7 @@ export async function runAgentLoop(
     async function runTurn(): Promise<{
         reply: AssistantMessage;
         toolResults: ToolResultMessage[];
+        allTerminated: boolean;
     }> {
         await emit({type: "turn_start", turn});
         config.signal?.throwIfAborted();
@@ -144,10 +147,12 @@ export async function runAgentLoop(
         }
         finalMessage = reply;
 
-        // Task 4 的工具尚未接收 signal。
-        // assistant 工具调用已入历史后，完成整批工具结果，再在 Turn 边界响应取消。
-        const {results} = await executeTools(context.tools, reply, {
+        // signal 传入工具与 Hook；取消后，执行器为剩余调用补齐取消结果。
+        // assistant 工具调用已入历史，先保存整批结果，再在 Turn 边界退出。
+        const {results, allTerminated} = await executeTools(context.tools, reply, {
             beforeToolCall: config.beforeToolCall,
+            afterToolCall: config.afterToolCall,
+            signal: config.signal,
             emit,
         });
 
@@ -158,7 +163,7 @@ export async function runAgentLoop(
             message: reply,
             toolResults: results,
         });
-        return {reply, toolResults: results};
+        return {reply, toolResults: results, allTerminated};
 
 
     }
@@ -172,6 +177,7 @@ export async function runAgentLoop(
         }
 
         let pendingMessages = [...initialMessages];
+        let lastTurnTerminated = false;
 
         // 外层负责初始输入，以及当前任务完成后的 followUp。
         // 必须 do/while：continue() 传 [] 时也需要执行第一次模型请求。
@@ -188,8 +194,9 @@ export async function runAgentLoop(
                 }
                 turn++;
                 //LLM交互
-                const {reply, toolResults} = await runTurn();
-
+                const {reply, toolResults, allTerminated} = await runTurn();
+                lastTurnTerminated = allTerminated;
+                // 先保存这一批的成功/失败/取消结果，再在边界退出。
                 config.signal?.throwIfAborted();
 
 
@@ -202,12 +209,10 @@ export async function runAgentLoop(
                 config.signal?.throwIfAborted();
                 if (shouldStop) return await finish("terminated");
 
+                const needsToolContinuation = toolResults.length > 0 && !allTerminated;
 
-                // 用完预算且仍需要继续时，不能取走队列消息却不处理。
-                if (turn >= config.maxTurns) {
-                    // 无工具且没有队列时，第 N 轮直接回答仍属于正常完成。
-                    // 是否有队列由下面轮询确定；轮询得到的消息会先记录再结束。
-                    if (toolResults.length > 0) return await finish("max_turns");
+                if (turn >= config.maxTurns && needsToolContinuation) {
+                    return await finish("max_turns");
                 }
 
                 const steering = config.pollSteering?.() ?? [];
@@ -215,17 +220,14 @@ export async function runAgentLoop(
                     await appendAndEmitMessages(steering);
                     continue;
                 }
-                if (toolResults.length > 0) {
-                    continue;
-                }
 
+                if (needsToolContinuation) continue;
                 break;
-
             }
             pendingMessages = config.pollFollowUp?.() ?? [];
 
         } while (pendingMessages.length > 0);
-        return await finish("completed");
+        return await finish(lastTurnTerminated ? "terminated" : "completed");
     } catch (error) {
         // 已尝试发布 agent_end 后，监听器异常仍向上传播，不能伪装成取消成功。
         if (agentEnded) throw error;

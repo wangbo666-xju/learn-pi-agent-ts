@@ -24,22 +24,16 @@ export class ReadFileTool implements Tool {
         additionalProperties: false,
     };
 
-
-    async execute(args: ToolArguments): Promise<ToolExecutionResult> {
+    async execute(args: ToolArguments, signal?: AbortSignal): Promise<ToolExecutionResult> {
+        signal?.throwIfAborted();
         const path = args.path;
-
         if (typeof path !== "string") {
             throw new Error("read 工具缺少字符串类型的 path 参数");
         }
-
-        const absolutePath = resolvePath(
-            this.workspaceRoot,
-            path,
-        );
-        return {
-            content: await readFile(absolutePath, "utf8"),
-        };
+        const absolutePath = resolvePath(this.workspaceRoot, path);
+        const content = await readFile(absolutePath, {encoding: "utf8", signal});
+        signal?.throwIfAborted();
+        return {content};
     }
-
 
 }
