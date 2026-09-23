@@ -1,5 +1,7 @@
 # Task 7：CLI 运行控制执行文档
 
+> 2026-09-21 已实施并通过自动化验证。实际 main 额外处理进程 SIGINT，以覆盖非 TTY 输入；新增 cli-process.test.ts 验证真实 CLI 与本地 SSE。手工验收状态见 ../ACCEPTANCE.md。
+
 ## 改动总结、效果与原因
 
 | 改动 | 完成后的效果 | 为什么需要 |

@@ -1,11 +1,13 @@
-import {createInterface} from "node:readline/promises";
+import {createInterface} from "node:readline";
 import {stdin, stdout} from "node:process";
-
-import Agent from "./agent.ts";
-import {runAgentPrompt} from "./cli-agent-runner.ts";
+import {dirname, resolve} from "node:path";
+import {fileURLToPath} from "node:url";
+import {createCliRunner} from "./cli-agent-runner.ts";
+import {createCliEventRenderer} from "./cli-event-renderer.ts";
 import {parseCliCommand} from "./cli-command.ts";
 import {RealLlmClient} from "./real-llm.ts";
 import {SessionManager} from "./session/session-manager.ts";
+import {createSessionAgent} from "./session/create-session-agent.ts";
 import type {SessionStore} from "./session/session-store.ts";
 import {createToolPolicy} from "./tool-policy.ts";
 import {ListDirTool} from "./tools/list-dir-tool.ts";
@@ -14,198 +16,155 @@ import {WriteFileTool} from "./tools/write-file-tool.ts";
 import {loadSkills} from "./skills/skill-loader.ts";
 import {formatSkillInvocation} from "./skills/skill-invocation.ts";
 import {formatSkillsForSystemPrompt} from "./skills/system-prompt.ts";
-import {dirname, resolve} from "node:path";
-import {fileURLToPath} from "node:url";
-import {createSessionAgent} from "./session/create-session-agent.ts";
 
-
-// main.ts 位于 <项目根目录>/src/，因此向上一层得到项目根目录。
-// 不依赖 IDEA 的 Working directory。
-const sourceDir = dirname(
-    fileURLToPath(import.meta.url),
-);
-
-const projectRoot = resolve(sourceDir, "..");
-
-const cwd = projectRoot;
-
-const sessionManager = new SessionManager(
-    resolve(projectRoot, "sessions"),
-);
-
-const skills = await loadSkills(
-    resolve(projectRoot, "skills"),
-);
-
+const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const sessionManager = new SessionManager(resolve(projectRoot, "sessions"));
+const skills = await loadSkills(resolve(projectRoot, "skills"));
 const systemPrompt = [
-    "你是一个可调用文件工具的编程助手。",
+    "你是一个可调用文件工具的编程助手。遇到策略禁止时应说明原因，不尝试绕过限制。",
     formatSkillsForSystemPrompt(skills),
-]
-    .filter((part) => part.length > 0)
-    .join("\n\n");
+].filter((part) => part.length > 0).join("\n\n");
 
+const write = (text: string): void => { stdout.write(text); };
 const policy = createToolPolicy(async (toolCall) => {
-    console.log("准备执行工具：", toolCall.name, toolCall.arguments);
+    write("\n准备执行工具：" + toolCall.name + "\n");
     return true;
 });
 
-async function createAgent(sessionStore: SessionStore): Promise<Agent> {
-    const agent = await createSessionAgent(sessionStore, {
+async function createRuntime(store: SessionStore) {
+    const agent = await createSessionAgent(store, {
         llm: new RealLlmClient(),
         tools: [
-            new ReadFileTool(cwd),
-            new WriteFileTool(cwd),
-            new ListDirTool(cwd),
+            new ReadFileTool(projectRoot),
+            new WriteFileTool(projectRoot),
+            new ListDirTool(projectRoot),
         ],
         beforeToolCall: policy,
         systemPrompt,
     });
-
-    // 工厂已注册持久化；此处只注册显示，不再注册第二个存储监听器。
-    agent.subscribe((event) => {
-        if (event.type === "message_update" && event.update.type === "text_delta") {
-            stdout.write(event.update.delta);
-        }
-        if (event.type === "tool_execution_end") {
-            const state = event.isError ? "error" : "done";
-            console.log("\n工具执行状态：" + event.toolName + ":" + state);
-        }
-    });
-    return agent;
+    agent.subscribe(createCliEventRenderer(write));
+    return {agent, runner: createCliRunner(agent, write)};
 }
 
 function printHelp(): void {
-    console.log(`
-可用命令：
-  /new                 新建一个会话
-  /sessions            查看全部会话 ID
-  /resume <sessionId>  恢复指定会话
-  /help                查看帮助
-  /exit                退出程序
-  /skills              查看可用 Skill
-  /skill:<name> <要求> 显式调用一个 Skill
-`);
+    write([
+        "",
+        "可用命令：",
+        "  /new                 新建会话",
+        "  /sessions            列出会话 ID",
+        "  /resume <sessionId>  恢复指定会话",
+        "  /skills              列出 Skill",
+        "  /skill:<name> <要求> 显式调用 Skill",
+        "  /status              查看运行状态",
+        "  /abort               请求取消当前运行",
+        "  /steer <要求>        当前 Turn 后优先注入",
+        "  /followup <要求>     当前任务结束后继续",
+        "  /help                查看帮助",
+        "  /exit                取消、等待收尾并退出",
+        "",
+    ].join("\n"));
 }
 
 let sessionStore = await sessionManager.create();
-let agent = await createAgent(sessionStore);
-
-const metadata = await sessionStore.getMetadata();
-console.log(`已创建会话：${metadata.id}`);
+let runtime = await createRuntime(sessionStore);
+write("已创建会话：" + (await sessionStore.getMetadata()).id + "\n");
 printHelp();
 
-const cli = createInterface({
-    input: stdin,
-    output: stdout,
-});
-
+const cli = createInterface({input: stdin, output: stdout, prompt: "\n你> "});
+// Ctrl+C 与 /exit 一样走 finally，不调用 process.exit 强行结束。
+function requestExit(): void {
+    runtime.agent.abort();
+    cli.close();
+}
+cli.on("SIGINT", requestExit);
+// IDEA/管道输入可能不是 TTY，进程信号不一定经过 readline。
+process.on("SIGINT", requestExit);
+cli.prompt();
 
 try {
-    while (true) {
-        const input = await cli.question("\n你> ");
-        const command = parseCliCommand(input);
-
-        if (command.type === "empty") {
-            continue;
-        }
-
-        if (command.type === "help") {
-            printHelp();
-            continue;
-        }
-
-        if (command.type === "exit") {
-            break;
-        }
-
-        if (command.type === "new") {
-            sessionStore = await sessionManager.create();
-            agent = await createAgent(sessionStore);
-
-            const newMetadata = await sessionStore.getMetadata();
-            console.log(`已创建会话：${newMetadata.id}`);
-            continue;
-        }
-
-        if (command.type === "list") {
-            const sessionIds = await sessionManager.listSessionIds();
-            if (sessionIds.length === 0) {
-                console.log("暂无历史会话。");
-            } else {
-                console.log("历史会话：");
-                for (const sessionId of sessionIds) {
-                    console.log(`- ${sessionId}`);
-                }
-            }
-            continue;
-        }
-
-
-        if (command.type === "resume") {
-            if (!command.sessionId) {
-                console.log("用法：/resume <sessionId>");
+    // 输入按行进入；不等待模型 Prompt，因此运行控制命令能够到达。
+    // 会话创建/恢复仍按命令顺序 await，避免多个会话操作互相覆盖。
+    for await (const input of cli) {
+        try {
+            const command = parseCliCommand(input);
+            if (command.type === "exit") break;
+            if (runtime.runner.handleControl(command)) {
+                cli.prompt();
                 continue;
             }
 
-            try {
-                sessionStore = await sessionManager.open(command.sessionId);
-                agent = await createAgent(sessionStore);
-                console.log(`已恢复会话：${command.sessionId}`);
-
-            } catch (error) {
-                const message = error instanceof Error
-                    ? error.message
-                    : String(error);
-                console.log(`恢复会话失败：${message}`);
-            }
-            continue;
-
-        }
-
-        if (command.type === "skills") {
-            if (skills.length === 0) {
-                console.log("当前没有可用 Skill。");
-            } else {
-                console.log("可用 Skill：");
-
-                for (const skill of skills) {
-                    console.log(`- ${skill.name}: ${skill.description}`);
+            switch (command.type) {
+                case "empty":
+                    break;
+                case "help":
+                    printHelp();
+                    break;
+                case "new": {
+                    const nextStore = await sessionManager.create();
+                    const nextRuntime = await createRuntime(nextStore);
+                    // 新装配成功后才替换；失败仍保留原会话。
+                    await runtime.runner.close();
+                    sessionStore = nextStore;
+                    runtime = nextRuntime;
+                    write("已创建会话：" + (await sessionStore.getMetadata()).id + "\n");
+                    break;
                 }
+                case "resume": {
+                    if (!command.sessionId) {
+                        write("用法：/resume <sessionId>\n");
+                        break;
+                    }
+                    const nextStore = await sessionManager.open(command.sessionId);
+                    const nextRuntime = await createRuntime(nextStore);
+                    await runtime.runner.close();
+                    sessionStore = nextStore;
+                    runtime = nextRuntime;
+                    write("已恢复会话：" + command.sessionId + "\n");
+                    break;
+                }
+                case "list": {
+                    const ids = await sessionManager.listSessionIds();
+                    write(ids.length ? "历史会话：\n" + ids.join("\n") + "\n" : "暂无历史会话\n");
+                    break;
+                }
+                case "skills":
+                    write(skills.length
+                        ? skills.map((skill) => skill.name + ": " + skill.description).join("\n") + "\n"
+                        : "当前没有可用 Skill\n");
+                    break;
+                case "skill": {
+                    const skill = skills.find((item) => item.name === command.name);
+                    if (!skill) {
+                        write("找不到 Skill：" + command.name + "\n");
+                        break;
+                    }
+                    runtime.runner.startPrompt(
+                        formatSkillInvocation(skill, command.additionalInstructions),
+                    );
+                    break;
+                }
+                case "prompt":
+                    runtime.runner.startPrompt(command.text);
+                    break;
+                // 以下命令已经由 handleControl 处理，不读取不存在的 command.text。
+                case "status":
+                case "abort":
+                case "steer":
+                case "followup":
+                    break;
             }
-
-            continue;
+        } catch (error) {
+            write("\n命令执行失败：" +
+                (error instanceof Error ? error.message : String(error)) + "\n");
         }
-
-        if (command.type === "skill") {
-            const skill = skills.find(
-                (item) => item.name === command.name,
-            );
-
-            if (!skill) {
-                console.log(`找不到 Skill：${command.name}`);
-                continue;
-            }
-
-            await runAgentPrompt(
-                agent,
-                formatSkillInvocation(
-                    skill,
-                    command.additionalInstructions,
-                ),
-                (message) => console.log(`\n执行失败：${message}`),
-            );
-
-            continue;
-        }
-
-        await runAgentPrompt(
-            agent,
-            command.text,
-            (message) => console.log(`\n执行失败：${message}`),
-        );
-
-
+        cli.prompt();
     }
 } finally {
     cli.close();
+    try {
+        await runtime.runner.close();
+    } finally {
+        process.off("SIGINT", requestExit);
+        cli.off("SIGINT", requestExit);
+    }
 }

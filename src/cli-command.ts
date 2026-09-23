@@ -1,35 +1,24 @@
 export type CliCommand =
-    | { type: "empty" }
-    | { type: "new" }
-    | { type: "list" }
-    | { type: "skills" }
-    | {
-    type: "skill";
-    name: string;
-    additionalInstructions?: string;
-}
-    | { type: "resume"; sessionId?: string }
-    | { type: "help" }
-    | { type: "exit" }
-    | { type: "prompt"; text: string };
+    | {type: "empty"}
+    | {type: "new"}
+    | {type: "list"}
+    | {type: "skills"}
+    | {type: "skill"; name: string; additionalInstructions?: string}
+    | {type: "resume"; sessionId?: string}
+    | {type: "help"}
+    | {type: "exit"}
+    | {type: "status"}
+    | {type: "abort"}
+    | {type: "steer"; text?: string}
+    | {type: "followup"; text?: string}
+    | {type: "prompt"; text: string};
 
 export function parseCliCommand(input: string): CliCommand {
     const text = input.trim();
+    if (!text) return {type: "empty"};
+    if (!text.startsWith("/")) return {type: "prompt", text};
 
-    if (!text) {
-        return {type: "empty"};
-    }
-
-    if (!text.startsWith("/")) {
-        return {
-            type: "prompt",
-            text,
-        };
-    }
-
-
-    const [command, ...args] = text.split(/\s+/);
-
+    const [command = "", ...args] = text.split(/\s+/);
     if (command.startsWith("/skill:")) {
         return {
             type: "skill",
@@ -39,26 +28,18 @@ export function parseCliCommand(input: string): CliCommand {
     }
 
     switch (command) {
-        case "/new":
-            return {type: "new"};
-        case "/sessions":
-            return {type: "list"};
-        case "/resume":
-            return {
-                type: "resume",
-                sessionId: args[0],
-            };
-        case "/help":
-            return {type: "help"};
-        case "/exit":
-            return {type: "exit"};
-        case "/skills":
-            return {type: "skills"};
+        case "/new": return {type: "new"};
+        case "/sessions": return {type: "list"};
+        case "/resume": return {type: "resume", sessionId: args[0]};
+        case "/help": return {type: "help"};
+        case "/exit": return {type: "exit"};
+        case "/skills": return {type: "skills"};
+        case "/status": return {type: "status"};
+        case "/abort": return {type: "abort"};
+        case "/steer": return {type: "steer", text: args.join(" ") || undefined};
+        case "/followup": return {type: "followup", text: args.join(" ") || undefined};
         default:
-            // 未知 /命令 也交给模型，当作普通问题处理。
-            return {
-                type: "prompt",
-                text,
-            };
+            // 保留原行为：未知 /命令 当成普通输入交给模型。
+            return {type: "prompt", text};
     }
 }
