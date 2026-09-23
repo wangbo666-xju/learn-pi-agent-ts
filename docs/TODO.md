@@ -1,3 +1,25 @@
+# 当前后续方向
+
+旧文档只用于保留学习过程，不作为当前施工清单。
+其中曾把内外层名称写反：当前实现是内层处理工具续跑/steer，外层处理 followUp。
+当前 partial 保存在 streamingMessage，只有完整消息进入历史；不沿用旧文档的 partial 落库设想。
+
+核心任务状态见 [任务索引](task/00-INDEX.md)，测试证据见 [验收记录](ACCEPTANCE.md)。
+
+## 可选扩展，不影响学习版核心完成
+
+- Context Compact：摘要与最近消息，以及恢复时的压缩记录。
+- 高级 Session：fork、lane、record，与普通消息的区分。
+- 工具并发：按工具能力决定串行或并行，处理同路径冲突。
+- 图片输入与 thinking/usage：扩展消息和事件协议。
+- 多 Provider 与重试：适配差异、限流、超时、成本统计。
+- 安全与恢复：真实路径检查、符号链接策略、JSONL 损坏检测。
+- TUI 或 HTTP 服务：复用 Agent，替换交互入口。
+
+---
+
+以下为早期历史计划：
+
 # 下一步规划（TODO）
 
 > 本文是流式输出阶段的历史计划，不再作为当前任务清单。新的学习版 Agent 计划见 [`PI_AGENT_LEARNING_DESIGN.md`](./PI_AGENT_LEARNING_DESIGN.md) 和 [`2026-09-03-pi-agent-learning-core.md`](./superpowers/plans/2026-09-03-pi-agent-learning-core.md)。

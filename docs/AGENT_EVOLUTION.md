@@ -273,3 +273,37 @@ Session 类型
 → Lane / fork / Record
 → TUI
 ```
+
+> 2026-09-21：实现完成，73 项自动化测试与类型检查通过，真实模型手工验收待执行。详见 [验收记录](ACCEPTANCE.md)。
+
+## 核心运行时阶段：State、Event、Context 与双层 Loop
+
+以前靠一个循环完成请求与工具调用，现在分出 Agent 管控制、Loop 管编排、LLM 管协议适配。
+
+增加统一 AgentState 和 AgentEvent；partial 只更新实时 State，完整消息进入历史。
+Context 的 transform/convert 只准备本次请求，不直接删改持久化历史。
+
+运行控制包含 abort、waitForIdle、continue、reset、steer、followUp。
+内层循环处理工具续跑与 steer；外层处理 followUp。
+maxTurns 统计整个 Run 的模型请求次数，所有结束路径统一清理临时状态。
+
+## 工具与持久化阶段：统一执行与事件订阅
+
+工具统一经过查找、参数校验、before、execute、after 和结果生成。
+新增 signal、进度事件和 terminate；普通工具错误能回传，取消不回滚已发生的副作用。
+
+Agent 不再依赖 SessionStore。createSessionAgent 恢复历史并注册保存监听器，
+仅 message_end 追加 JSONL，避免流式片段与旧历史重复保存。
+
+## CLI 阶段：边运行边控制
+
+输入循环不再等待整个 Prompt。CLI Runner 管后台任务、错误与会话切换保护，
+Renderer 订阅事件显示文本和工具状态。
+
+旧记录中的“尚未实现 Session/Skill/运行控制”等描述仅代表当时阶段；
+当前完成情况以 docs/task/00-INDEX.md 和 docs/ACCEPTANCE.md 为准。
+
+## 本阶段保留的边界
+
+不实现生产级沙箱、JSONL 事务恢复、工具并发、Compact、高级 Session 和 TUI。
+完成核心链路后再按学习需要选下一项，不以复刻全部 Pi 功能作为完成标准。
