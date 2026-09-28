@@ -5,6 +5,7 @@ import {fileURLToPath} from "node:url";
 import {createCliRunner} from "./cli-agent-runner.ts";
 import {createCliEventRenderer} from "./cli-event-renderer.ts";
 import {parseCliCommand} from "./cli-command.ts";
+import {compactSession} from "./compaction.ts";
 import {RealLlmClient} from "./real-llm.ts";
 import {SessionManager} from "./session/session-manager.ts";
 import {createSessionAgent} from "./session/create-session-agent.ts";
@@ -32,8 +33,10 @@ const policy = createToolPolicy(async (toolCall) => {
 });
 
 async function createRuntime(store: SessionStore) {
+    // 普通对话和摘要复用同一个模型适配器；压缩不走 Agent 的工具循环。
+    const llm = new RealLlmClient();
     const agent = await createSessionAgent(store, {
-        llm: new RealLlmClient(),
+        llm,
         tools: [
             new ReadFileTool(projectRoot),
             new WriteFileTool(projectRoot),
@@ -43,7 +46,10 @@ async function createRuntime(store: SessionStore) {
         systemPrompt,
     });
     agent.subscribe(createCliEventRenderer(write));
-    return {agent, runner: createCliRunner(agent, write)};
+    return {
+        agent,
+        runner: createCliRunner(agent, write, (signal) => compactSession(agent, store, llm, signal)),
+    };
 }
 
 function printHelp(): void {
@@ -56,6 +62,7 @@ function printHelp(): void {
         "  /skills              列出 Skill",
         "  /skill:<name> <要求> 显式调用 Skill",
         "  /status              查看运行状态",
+        "  /compact             压缩旧对话，保留最近两组消息",
         "  /abort               请求取消当前运行",
         "  /steer <要求>        当前 Turn 后优先注入",
         "  /followup <要求>     当前任务结束后继续",
@@ -73,7 +80,7 @@ printHelp();
 const cli = createInterface({input: stdin, output: stdout, prompt: "\n你> "});
 // Ctrl+C 与 /exit 一样走 finally，不调用 process.exit 强行结束。
 function requestExit(): void {
-    runtime.agent.abort();
+    runtime.runner.abort();
     cli.close();
 }
 cli.on("SIGINT", requestExit);
@@ -149,6 +156,7 @@ try {
                 // 以下命令已经由 handleControl 处理，不读取不存在的 command.text。
                 case "status":
                 case "abort":
+                case "compact":
                 case "steer":
                 case "followup":
                     break;

@@ -27,11 +27,11 @@ test("不接 SessionStore 的 Agent 仍可完成普通问答", async () => {
 
 test("读取历史失败时工厂拒绝创建，不调用模型也不追加消息", async () => {
     const store = new MemorySessionStore({id: "read-error", createdAt: 0});
-    store.getMessages = async () => { throw new Error("历史读取失败"); };
+    store.getEntries = async () => { throw new Error("历史读取失败"); };
     const llm = new FakeLlmClient([]);
     await assert.rejects(createSessionAgent(store, {llm, tools: []}), /历史读取失败/);
     assert.equal(llm.requests.length, 0);
-    assert.deepEqual(await store.getEntries(), []);
+    assert.deepEqual(await store.getMessages(), []);
 });
 
 test("完整工具交互只保存四条消息，不保存流式片段和工具进度", async () => {

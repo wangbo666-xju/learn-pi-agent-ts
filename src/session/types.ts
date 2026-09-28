@@ -4,7 +4,7 @@ import type {AgentMessage} from "../types.ts";
  * 当前 Session 文件格式版本。
  * 后续修改落盘结构时，需要增加版本号并考虑旧数据迁移。
  */
-export const CURRENT_SESSION_VERSION = 1;
+export const CURRENT_SESSION_VERSION = 2;
 
 
 /**
@@ -22,7 +22,7 @@ export type SessionMetadata = {
  */
 export type SessionHeader = SessionMetadata & {
     type: "session";
-    version: typeof CURRENT_SESSION_VERSION;
+    version: 1 | 2;
 };
 
 /**
@@ -47,4 +47,19 @@ export type SessionMessageEntry = {
 /**
  * JSONL 文件中可能出现的数据类型。
  */
-export type SessionFileItem = SessionHeader | SessionMessageEntry;
+export type SessionFileItem = SessionHeader | SessionEntry;
+
+export type SessionEntry = SessionMessageEntry | SessionCompactionEntry;
+
+
+export type CompactionInput = {
+    summary: string;          // 旧消息的摘要
+    firstKeptEntryId: string;  // 从哪条消息开始保留原文
+};
+
+export type SessionCompactionEntry = CompactionInput & {
+    type: "compaction";
+    id: string;
+    seq: number;
+    timestamp: number;
+};

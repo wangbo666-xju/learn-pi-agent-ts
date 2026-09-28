@@ -118,6 +118,12 @@ class Agent {
         return this.startRun([]);
     }
 
+    replaceMessages(messages: AgentMessage[]): void {
+        if (this.activeRun) throw new Error("Agent 尚未收尾，不能替换上下文");
+        this._state.messages = structuredClone(messages);
+        this._state.streamingMessage = undefined;
+    }
+
     /**
      * 只清理当前 Agent 的内存，不删除 JSONL。
      * 新建持久化对话仍应使用 SessionManager.create() + 新 Agent。

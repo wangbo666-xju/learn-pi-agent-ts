@@ -2,6 +2,7 @@ import type {AgentMessage} from "../types.ts";
 import type {
     SessionMessageEntry,
     SessionMetadata,
+    CompactionInput, SessionCompactionEntry, SessionEntry
 } from "./types.ts";
 
 
@@ -25,14 +26,22 @@ export interface SessionStore {
 
 
     /**
-     * 按 seq 从小到大读取全部消息 Entry。
+     * 按 seq 从小到大读取全部 Entry，包括原消息和压缩记录。
      */
-    getEntries(): Promise<SessionMessageEntry[]>;
+    getEntries(): Promise<SessionEntry[]>;
 
 
     /**
-     * 读取可以直接恢复到 Agent Context 的消息。
+     * 读取所有原始消息，用于查看历史，不应用压缩。
+     * 恢复 Agent 上下文应使用 buildAgentContext(await store.getEntries())。
      */
     getMessages(): Promise<AgentMessage[]>;
+
+
+    /** 追加摘要和保留边界；不删除或覆盖原消息。 */
+    appendCompaction(input: CompactionInput): Promise<SessionCompactionEntry>;
+
+    /** 模型调用前检查存储格式是否支持压缩；v1 会话会拒绝。 */
+    assertCanCompact(): void;
 
 }

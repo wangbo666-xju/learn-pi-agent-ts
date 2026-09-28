@@ -66,7 +66,12 @@ test("chatStream 按顺序发出模型语义事件", async () => {
 		},
 	});
 
-	globalThis.fetch = async () => new Response(body, {status: 200});
+	globalThis.fetch = async (_input, init) => {
+		const request = JSON.parse(String(init?.body)) as Record<string, unknown>;
+		assert.equal("tools" in request, false);
+		assert.equal("tool_choice" in request, false);
+		return new Response(body, {status: 200});
+	};
 
 	try {
 		const events: LlmStreamEvent[] = [];
@@ -92,4 +97,38 @@ test("chatStream 按顺序发出模型语义事件", async () => {
 		process.env.OPENAI_BASE_URL = originalBaseUrl;
 		process.env.OPENAI_MODEL = originalModel;
 	}
+});
+
+test("摘要请求省略工具、限制输出并拒绝截断响应", async () => {
+    const previousFetch = globalThis.fetch;
+    const names = ["OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL"];
+    const saved = names.map((name) => process.env[name]);
+    process.env.OPENAI_API_KEY = "test-only";
+    process.env.OPENAI_BASE_URL = "https://example.test";
+    process.env.OPENAI_MODEL = "test-model";
+    let finishReason = "stop";
+    globalThis.fetch = async (_url, init) => {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        assert.equal(body.max_tokens, 2048);
+        assert.equal("tools" in body, false);
+        assert.equal("tool_choice" in body, false);
+        return new Response(JSON.stringify({choices: [{
+            finish_reason: finishReason,
+            message: {content: "摘要"},
+        }]}));
+    };
+    try {
+        const client = new RealLlmClient();
+        const reply = await client.chat([], [], {maxOutputTokens: 2048});
+        assert.equal(reply.content, "摘要");
+        finishReason = "length";
+        await assert.rejects(client.chat([], [], {maxOutputTokens: 2048}), /长度上限/);
+    } finally {
+        globalThis.fetch = previousFetch;
+        names.forEach((name, index) => {
+            const value = saved[index];
+            if (value === undefined) delete process.env[name];
+            else process.env[name] = value;
+        });
+    }
 });

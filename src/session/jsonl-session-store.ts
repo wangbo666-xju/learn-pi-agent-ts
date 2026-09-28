@@ -14,19 +14,31 @@ import {
     type SessionHeader,
     type SessionMessageEntry,
     type SessionMetadata,
+    type SessionEntry,
+    type CompactionInput,
+    type SessionCompactionEntry,
 } from "./types.ts";
+import {validateCompaction} from "./build-agent-context.ts";
 
 export class JsonlSessionStore implements SessionStore {
 
     private readonly filePath: string;
     private readonly metadata: SessionMetadata;
-    private readonly entries: SessionMessageEntry[];
+    private readonly entries: SessionEntry[];
 
 
-    constructor(filePath: string, metadata: SessionMetadata, entries: SessionMessageEntry[]) {
+    private readonly version: 1 | 2;
+
+    constructor(
+        filePath: string,
+        metadata: SessionMetadata,
+        entries: SessionEntry[],
+        version: 1 | 2 = CURRENT_SESSION_VERSION,
+    ) {
         this.filePath = filePath;
         this.metadata = metadata;
         this.entries = entries;
+        this.version = version;
     }
 
     async appendMessage(message: AgentMessage): Promise<SessionMessageEntry> {
@@ -49,14 +61,14 @@ export class JsonlSessionStore implements SessionStore {
     }
 
 
-    async getEntries(): Promise<SessionMessageEntry[]> {
+    async getEntries(): Promise<SessionEntry[]> {
         return structuredClone(this.entries);
     }
 
     async getMessages(): Promise<AgentMessage[]> {
-        return this.entries.map((entry) =>
-            structuredClone(entry.message),
-        );
+        return this.entries
+            .filter((entry): entry is SessionMessageEntry => entry.type === "message")
+            .map((entry) => structuredClone(entry.message));
     }
 
     async getMetadata(): Promise<SessionMetadata> {
@@ -119,30 +131,27 @@ export class JsonlSessionStore implements SessionStore {
             throw new Error("Session 文件缺少 header");
         }
 
-        if (header.version !== CURRENT_SESSION_VERSION) {
-            throw new Error(
-                `不支持的 Session 版本：${header.version}`,
-            );
+        if (header.version !== 1 && header.version !== 2) {
+            throw new Error(`不支持的 Session 版本：${header.version}`);
         }
-        const entries: SessionMessageEntry[] = [];
+        const entries: SessionEntry[] = [];
         for (let index = 1; index < items.length; index++) {
-
             const item = items[index];
-            if (!item || item.type !== "message") {
-                throw new Error(
-                    `Session 第 ${index + 1} 行不是 message Entry`,
-                );
+            if (!item || (item.type !== "message" && item.type !== "compaction")) {
+                throw new Error(`Session 第 ${index + 1} 行不是有效 Entry`);
             }
-
-            const expectedSequence = entries.length + 1;
-            if (item.seq !== expectedSequence) {
-                throw new Error(
-                    `Session seq 不连续：期望 ${expectedSequence}，实际 ${item.seq}`,
-                );
+            if (item.seq !== entries.length + 1) throw new Error("Session seq 不连续");
+            if (typeof item.id !== "string" || !item.id || entries.some((entry) => entry.id === item.id)) {
+                throw new Error("Session Entry id 无效或重复");
+            }
+            if (item.type === "compaction") {
+                if (header.version === 1) throw new Error("v1 会话不能包含 compaction");
+                if (typeof item.summary !== "string" || typeof item.firstKeptEntryId !== "string") {
+                    throw new Error("压缩记录字段无效");
+                }
+                validateCompaction(entries, item);
             }
             entries.push(item);
-
-
         }
         return new JsonlSessionStore(
             filePath,
@@ -151,7 +160,24 @@ export class JsonlSessionStore implements SessionStore {
                 createdAt: header.createdAt,
             },
             entries,
+            header.version
         );
+    }
+
+    assertCanCompact(): void {
+        if (this.version === 1) throw new Error("旧 v1 会话暂不支持压缩，请 /new 后体验");
+    }
+
+    async appendCompaction(input: CompactionInput): Promise<SessionCompactionEntry> {
+        this.assertCanCompact();
+        validateCompaction(this.entries, input);
+        const entry: SessionCompactionEntry = {
+            ...input, type: "compaction", id: randomUUID(),
+            seq: this.entries.length + 1, timestamp: Date.now(),
+        };
+        await appendFile(this.filePath, `${JSON.stringify(entry)}\n`, "utf8");
+        this.entries.push(entry);
+        return structuredClone(entry);
     }
 
 }

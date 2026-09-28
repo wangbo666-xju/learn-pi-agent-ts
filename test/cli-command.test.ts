@@ -3,6 +3,7 @@ import test from "node:test";
 import {parseCliCommand} from "../src/cli-command.ts";
 
 test("解析运行控制与原命令", () => {
+    assert.deepEqual(parseCliCommand("/compact"), {type: "compact"});
     assert.deepEqual(parseCliCommand("/status"), {type: "status"});
     assert.deepEqual(parseCliCommand("/abort"), {type: "abort"});
     assert.deepEqual(parseCliCommand("/steer 改成 只读"), {type: "steer", text: "改成 只读"});

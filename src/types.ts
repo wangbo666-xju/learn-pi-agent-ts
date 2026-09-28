@@ -46,6 +46,7 @@ export interface LlmClient {
 export type LlmRequestOptions = {
     systemPrompt?: string;
     signal?: AbortSignal;
+    maxOutputTokens?: number;
 };
 
 
@@ -71,7 +72,6 @@ export type LlmStreamEvent =
 export type LlmStreamListener = (
     event: LlmStreamEvent,
 ) => void | Promise<void>;
-
 
 
 //------------------------tool

@@ -9,6 +9,7 @@ export type CliCommand =
     | {type: "exit"}
     | {type: "status"}
     | {type: "abort"}
+    | {type: "compact"}
     | {type: "steer"; text?: string}
     | {type: "followup"; text?: string}
     | {type: "prompt"; text: string};
@@ -36,6 +37,7 @@ export function parseCliCommand(input: string): CliCommand {
         case "/skills": return {type: "skills"};
         case "/status": return {type: "status"};
         case "/abort": return {type: "abort"};
+        case "/compact": return {type: "compact"};
         case "/steer": return {type: "steer", text: args.join(" ") || undefined};
         case "/followup": return {type: "followup", text: args.join(" ") || undefined};
         default:

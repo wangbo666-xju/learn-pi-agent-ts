@@ -27,6 +27,7 @@ type ChatCompletionResponse = {
             content: string | null;
             tool_calls?: ApiToolCall[];
         };
+        finish_reason?: string | null;
     }>;
 };
 
@@ -74,8 +75,9 @@ export class RealLlmClient implements LlmClient {
             body: JSON.stringify({
                 model,
                 messages: apiMessages,
-                tools: toApiTools(tools),
-                tool_choice: "auto",
+                // 摘要不提供工具：省略字段，而不是发送 tools: []。
+                ...(tools.length > 0 ? {tools: toApiTools(tools), tool_choice: "auto"} : {}),
+                ...(options?.maxOutputTokens === undefined ? {} : {max_tokens: options.maxOutputTokens}),
             }),
             signal: options?.signal,
         });
@@ -85,6 +87,9 @@ export class RealLlmClient implements LlmClient {
         }
 
         const data = (await response.json()) as ChatCompletionResponse;
+        if (options?.maxOutputTokens !== undefined && data.choices[0]?.finish_reason === "length") {
+            throw new Error("摘要输出达到长度上限，请减少待总结内容");
+        }
         const message = data.choices[0]?.message;
         if (!message) {
             throw new Error("模型没有返回 message");
@@ -123,8 +128,9 @@ export class RealLlmClient implements LlmClient {
                 messages: toApiMessages(
                     messages,
                     options?.systemPrompt,
-                ), tools: toApiTools(tools),
-                tool_choice: "auto"
+                ),
+                ...(tools.length > 0 ? {tools: toApiTools(tools), tool_choice: "auto"} : {}),
+                ...(options?.maxOutputTokens === undefined ? {} : {max_tokens: options.maxOutputTokens}),
 
             }),
             signal: options?.signal,
