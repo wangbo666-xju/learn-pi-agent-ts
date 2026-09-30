@@ -8,6 +8,8 @@ import type {
     ToolArguments,
 } from "./types.ts";
 import {TextDecoder} from "node:util";
+import {createHash} from "node:crypto";
+import {normalizeUsage, createLlmHttpError} from "./llm-usage.ts";
 
 /** OpenAI 兼容接口中，非流式 tool_calls 的传输结构。 */
 type ApiToolCall = {
@@ -22,6 +24,7 @@ type ApiToolCall = {
 
 
 type ChatCompletionResponse = {
+    usage?: unknown;
     choices: Array<{
         message: {
             content: string | null;
@@ -33,6 +36,7 @@ type ChatCompletionResponse = {
 
 /** SSE 每个 data 帧解析后的最小结构，只声明本项目实际使用的字段。 */
 type StreamChunk = {
+    usage?: unknown;
     choices: Array<{
         delta: {
             content?: string;
@@ -59,9 +63,18 @@ type StreamChunk = {
  */
 export class RealLlmClient implements LlmClient {
 
+    /** 指纹不含密钥；固定提示或模型变化后，旧 usage 不再作为预算基线。 */
+    getUsageContextKey(tools: Tool[], options?: LlmRequestOptions): string {
+        const {baseUrl, model} = requireConfig();
+        return createHash("sha256").update(JSON.stringify({
+            baseUrl, model, systemPrompt: options?.systemPrompt ?? "", tools: toApiTools(tools),
+        })).digest("hex");
+    }
+
     /** 普通非流式请求：等待服务端一次性返回完整 assistant 消息。 */
     async chat(messages: AgentMessage[], tools: Tool[], options?: LlmRequestOptions,): Promise<AssistantMessage> {
         const {apiKey, baseUrl, model} = requireConfig();
+        const usageContextKey = this.getUsageContextKey(tools, options);
         const apiMessages = toApiMessages(
             messages,
             options?.systemPrompt,
@@ -83,7 +96,7 @@ export class RealLlmClient implements LlmClient {
         });
 
         if (!response.ok) {
-            throw new Error(`模型请求失败：${response.status} ${await response.text()}`);
+            throw createLlmHttpError(response.status, await response.text());
         }
 
         const data = (await response.json()) as ChatCompletionResponse;
@@ -94,9 +107,11 @@ export class RealLlmClient implements LlmClient {
         if (!message) {
             throw new Error("模型没有返回 message");
         }
+        const usage = normalizeUsage(data.usage);
         return {
             role: "assistant",
             content: message.content ?? "",
+            ...(usage ? {usage, usageContextKey} : {}),
             toolCalls: message.tool_calls?.map((toolCall) => ({
                 id: toolCall.id,
                 name: toolCall.function.name,
@@ -114,8 +129,7 @@ export class RealLlmClient implements LlmClient {
                      options?: LlmRequestOptions,): Promise<AssistantMessage> {
 
         const {apiKey, baseUrl, model} = requireConfig();
-
-
+        const usageContextKey = this.getUsageContextKey(tools, options);
         const response = await fetch(`${baseUrl}/chat/completions`, {
             method: "POST",
             headers: {
@@ -125,6 +139,7 @@ export class RealLlmClient implements LlmClient {
             body: JSON.stringify({
                 model,
                 stream: true,
+                stream_options: {include_usage: true},
                 messages: toApiMessages(
                     messages,
                     options?.systemPrompt,
@@ -136,11 +151,12 @@ export class RealLlmClient implements LlmClient {
             signal: options?.signal,
         });
         if (!response.ok) {
-            throw new Error(`模型请求失败：${response.status} ${await response.text()}`);
+            throw createLlmHttpError(response.status, await response.text());
         }
 
         // content 保存当前完整文本快照；每个 text_delta 都带上累积后的值。
         let content = "";
+        let usage: AssistantMessage["usage"];
 
         // 即使模型还没有输出文本，也先让上层进入“assistant 正在生成”的状态。
         await onEvent({
@@ -152,6 +168,8 @@ export class RealLlmClient implements LlmClient {
         const toolCallFragments = new Map<number, { id: string; name: string; argumentsText: string }>();
 
         await readSseChunks(response, async (chunk) => {
+            // 最后一个 usage 帧可能 choices=[]，必须在 delta 检查之前读取。
+            usage = normalizeUsage(chunk.usage) ?? usage;
             const delta = chunk.choices[0]?.delta;
             if (!delta) {
                 return;
@@ -210,6 +228,7 @@ export class RealLlmClient implements LlmClient {
         const message: AssistantMessage = {
             role: "assistant",
             content,
+            ...(usage ? {usage, usageContextKey} : {}),
             toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
         };
 

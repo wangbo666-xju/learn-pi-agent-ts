@@ -20,7 +20,7 @@ export async function runAgentPrompt(
 
 /** 每个 Session 对应一个 Runner，关闭后不再复用。 */
 export function createCliRunner(
-    agent: Agent,
+    agent: Pick<Agent, "state" | "prompt" | "abort" | "waitForIdle" | "steer" | "followUp"> & {readonly isCompacting?: boolean},
     write: (text: string) => void,
     compact?: (signal: AbortSignal) => Promise<string>,
 ) {
@@ -117,7 +117,7 @@ export function createCliRunner(
             write(JSON.stringify({
                 isRunning: agent.state.isRunning,
                 isSettling: Boolean(activePrompt) && !agent.state.isRunning,
-                isCompacting: Boolean(activeCompaction),
+                isCompacting: Boolean(activeCompaction) || Boolean(agent.isCompacting),
                 pendingToolCalls: [...agent.state.pendingToolCalls],
                 errorMessage: agent.state.errorMessage,
             }) + "\n");
@@ -129,7 +129,7 @@ export function createCliRunner(
             return true;
         }
         if (command.type === "steer" || command.type === "followup") {
-            if (activeCompaction) {
+            if (activeCompaction || agent.isCompacting) {
                 write("正在压缩，不能加入指令；请等待完成或 /abort\n");
             } else if (!command.text) {
                 write("用法：/" + command.type + " <要求>\n");

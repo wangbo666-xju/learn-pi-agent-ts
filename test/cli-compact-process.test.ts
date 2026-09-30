@@ -10,7 +10,7 @@ import test, {type TestContext} from "node:test";
 import {JsonlSessionStore} from "../src/session/jsonl-session-store.ts";
 
 /** 运行真实 main.ts，但文件与网络均隔离；不连接真实模型。 */
-async function startCli(t: TestContext, holdSummary: boolean) {
+async function startCli(t: TestContext, holdSummary: boolean, automatic = false) {
     const root = await mkdtemp(join(tmpdir(), "agent-compact-cli-"));
     t.after(() => rm(root, {recursive: true, force: true}));
     await cp(fileURLToPath(new URL("../src", import.meta.url)), join(root, "src"), {recursive: true});
@@ -37,6 +37,9 @@ async function startCli(t: TestContext, holdSummary: boolean) {
             if (request.stream) {
                 res.writeHead(200, {"Content-Type": "text/event-stream"});
                 res.end('data: {"choices":[{"delta":{"content":"恢复后继续完成"}}]}\n\n'
+                    + (automatic ? `data: ${JSON.stringify({choices: [], usage: {
+                        prompt_tokens: requests.length === 1 ? 850 : 100, completion_tokens: 50,
+                    }})}\n\n` : "")
                     + "data: [DONE]\n\n");
             } else {
                 res.on("close", notifyDisconnected);
@@ -63,6 +66,7 @@ async function startCli(t: TestContext, holdSummary: boolean) {
     ], {
         cwd: root,
         env: {...process.env, OPENAI_API_KEY: "test-only", OPENAI_MODEL: "test",
+            AGENT_CONTEXT_WINDOW: "1000", AGENT_COMPACT_RESERVE: "200",
             OPENAI_BASE_URL: `http://127.0.0.1:${address.port}`},
         stdio: ["pipe", "pipe", "pipe", "ipc"],
     });
@@ -79,8 +83,8 @@ async function startCli(t: TestContext, holdSummary: boolean) {
     stderr.setEncoding("utf8");
     stdout.on("data", (text: string) => { output += text; });
     stderr.on("data", (text: string) => { errors += text; });
-    async function waitForOutput(text: string): Promise<void> {
-        while (!output.includes(text)) {
+    async function waitForOutput(text: string, count = 1): Promise<void> {
+        while (output.split(text).length - 1 < count) {
             assert.equal(child.exitCode, null, errors);
             await once(stdout!, "data", {signal: t.signal});
         }
@@ -91,6 +95,45 @@ async function startCli(t: TestContext, holdSummary: boolean) {
     return {child, stdin, exited, waitForOutput, requests, file, summaryStarted, disconnected,
         errors: () => errors};
 }
+
+test("真实 CLI 自动压缩完成并落盘 usage，后续 /resume 恢复摘要", {timeout: 15000}, async (t) => {
+    const cli = await startCli(t, false, true);
+    cli.stdin.write("问题4\n");
+    await cli.waitForOutput("自动压缩完成");
+    cli.stdin.write("/resume history\n");
+    await cli.waitForOutput("已恢复会话：history", 2);
+    cli.stdin.write("问题5\n");
+    await cli.waitForOutput("恢复后继续完成", 2);
+    cli.stdin.write("/exit\n");
+    assert.equal((await cli.exited)[0], 0, cli.errors());
+    assert.equal(cli.requests.length, 3);
+    assert.equal(cli.requests[0]!.stream, true);
+    assert.equal(cli.requests[1]!.stream, undefined);
+    const store = await JsonlSessionStore.open(cli.file);
+    const entries = await store.getEntries();
+    assert.equal(entries.filter((e) => e.type === "compaction").length, 1);
+    const messages = await store.getMessages();
+    assert.ok(messages.some((message) => message.role === "assistant" && message.usage?.totalTokens === 900));
+    const requestMessages = cli.requests[2]!.messages as {role: string; content: string}[];
+    assert.match(requestMessages[1]!.content, /S1：第一组已完成/);
+    assert.equal(requestMessages.some((m) => m.content === "问题1"), false);
+    assert.equal(requestMessages.at(-1)!.content, "问题5");
+});
+
+test("真实 CLI 自动压缩中的退出会取消摘要，不损失已经完成的回答", {timeout: 15000}, async (t) => {
+    const cli = await startCli(t, true, true);
+    cli.stdin.write("问题4\n");
+    await cli.summaryStarted;
+    cli.stdin.write("/status\n/new\n");
+    await cli.waitForOutput('"isCompacting":true');
+    await cli.waitForOutput("当前任务尚未收尾");
+    cli.stdin.write("/exit\n");
+    assert.equal((await cli.exited)[0], 0, cli.errors());
+    await cli.disconnected;
+    const entries = await (await JsonlSessionStore.open(cli.file)).getEntries();
+    assert.equal(entries.length, 8);
+    assert.equal(entries.at(-1)!.type, "message");
+});
 
 test("真实 CLI 压缩落盘，恢复后普通请求使用摘要且仍有工具", {timeout: 15000}, async (t) => {
     const cli = await startCli(t, false);

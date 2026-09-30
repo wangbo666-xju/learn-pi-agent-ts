@@ -26,10 +26,18 @@
 
 | 顺序 | 文档 | 结果 | 状态 |
 |---|---|---|---|
-| 9 | [09-MANUAL-COMPACT.md](09-MANUAL-COMPACT.md) | 从流程和原因入手，分块实现 /compact | 设计文档，待实施 |
-| 10 | [10-COMPACT-VERIFICATION.md](10-COMPACT-VERIFICATION.md) | 恢复、重复压缩、取消与保存失败验证 | 设计文档，待实施 |
+| 9 | [09-MANUAL-COMPACT.md](09-MANUAL-COMPACT.md) | 从流程和原因入手，分块实现 /compact | 已实现，自动化通过 |
+| 10 | [10-COMPACT-VERIFICATION.md](10-COMPACT-VERIFICATION.md) | 恢复、重复压缩、取消与保存失败验证 | 测试已落地，全量 92 项通过；真实摘要质量待体验 |
 
 先读 09 的总体链路，再按 10 的测试逐块实现；本阶段不包含自动 Token 阈值。
+
+## 下一阶段：自动上下文管理
+
+| 顺序 | 文档 | 结果 | 状态 |
+|---|---|---|---|
+| 11 | [11-AUTO-COMPACT.md](11-AUTO-COMPACT.md) | usage 统计、Session 自动压缩、一次溢出恢复 | 已实现，类型检查与全量 110 项测试通过 |
+
+11 按最后确认的 Pi 思路，由 Session 在运行前后协调 09 的压缩核心，Loop 不持有 Session。包含一次明确上下文溢出的压缩恢复；不包含通用网络重试、按 Token 切点和分块摘要。
 
 ## 固定约束
 
@@ -74,5 +82,5 @@ Skill 自动索引和显式调用保持可用
 
 这份索引相当于项目的施工导航，不需要一次看完所有文档。Task 1 是地基；Task 2A 和 2B 分别整理模型输出与模型输入；Task 3 再把它们接入 Loop；Task 4-7 逐步补上运行控制、工具、Session 和 CLI。
 
-当前任务状态以上表为准，2026-09-21 全套 73 项测试通过，验收结果见 [ACCEPTANCE.md](../ACCEPTANCE.md)。
-下一步完成 08 的真实模型手工验收；不要按历史叙述推断实现进度。
+当前任务状态以上表为准。01—08 的早期验收见 [ACCEPTANCE.md](../ACCEPTANCE.md)；09/10 完成后的全量 92 项自动化记录见 [Task 10](10-COMPACT-VERIFICATION.md)。
+11 的实现、边界与验证方式见对应文档；真实模型手工验收单独记录，不以测试数量代替。不要按历史叙述推断实现进度。

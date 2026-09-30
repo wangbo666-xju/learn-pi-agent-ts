@@ -5,10 +5,9 @@ import {fileURLToPath} from "node:url";
 import {createCliRunner} from "./cli-agent-runner.ts";
 import {createCliEventRenderer} from "./cli-event-renderer.ts";
 import {parseCliCommand} from "./cli-command.ts";
-import {compactSession} from "./compaction.ts";
 import {RealLlmClient} from "./real-llm.ts";
 import {SessionManager} from "./session/session-manager.ts";
-import {createSessionAgent} from "./session/create-session-agent.ts";
+import {createSessionRuntime} from "./session/session-runtime.ts";
 import type {SessionStore} from "./session/session-store.ts";
 import {createToolPolicy} from "./tool-policy.ts";
 import {ListDirTool} from "./tools/list-dir-tool.ts";
@@ -35,7 +34,7 @@ const policy = createToolPolicy(async (toolCall) => {
 async function createRuntime(store: SessionStore) {
     // 普通对话和摘要复用同一个模型适配器；压缩不走 Agent 的工具循环。
     const llm = new RealLlmClient();
-    const agent = await createSessionAgent(store, {
+    const agent = await createSessionRuntime(store, {
         llm,
         tools: [
             new ReadFileTool(projectRoot),
@@ -44,11 +43,25 @@ async function createRuntime(store: SessionStore) {
         ],
         beforeToolCall: policy,
         systemPrompt,
+        // 应用预算，不是自动识别的模型上限；切模型时按实际窗口调整环境变量。
+        autoCompact: {
+            contextWindowTokens: Number(process.env.AGENT_CONTEXT_WINDOW ?? 32768),
+            reserveTokens: Number(process.env.AGENT_COMPACT_RESERVE ?? 4096),
+        },
+        onCompaction: (event) => {
+            if (event.type === "auto_compaction_start") {
+                write(event.reason === "overflow"
+                    ? "\n上下文溢出，正在压缩后恢复…\n"
+                    : "\n上下文接近预算，正在自动压缩…\n");
+            } else {
+                write(event.error ? "\n自动压缩未完成：" + event.error + "\n" : "\n自动压缩完成\n");
+            }
+        },
     });
     agent.subscribe(createCliEventRenderer(write));
     return {
         agent,
-        runner: createCliRunner(agent, write, (signal) => compactSession(agent, store, llm, signal)),
+        runner: createCliRunner(agent, write, (signal) => agent.compact(signal)),
     };
 }
 

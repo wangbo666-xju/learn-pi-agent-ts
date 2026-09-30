@@ -8,6 +8,18 @@ export type AssistantMessage = {
     role: "assistant";
     content: string;
     toolCalls?: ToolCall[];
+    /** 本次请求的实际用量；不是全会话累计费用。 */
+    usage?: TokenUsage;
+    /** 模型、服务地址、系统提示及工具定义的指纹，避免配置变化后使用旧用量。 */
+    usageContextKey?: string;
+};
+
+export type TokenUsage = {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    totalTokens: number;
 };
 
 export type ToolResultMessage = {
@@ -29,6 +41,7 @@ export type AgentMessage = UserMessage | AssistantMessage | ToolResultMessage;
 
 //------------------------llm
 export interface LlmClient {
+    getUsageContextKey?(tools: Tool[], options?: LlmRequestOptions): string;
     chat(
         messages: AgentMessage[],
         tools: Tool[],
