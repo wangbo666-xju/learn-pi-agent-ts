@@ -1,6 +1,55 @@
 /** 每章的短讲解：例子 → 结构 → 设计总结。与章节所选历史版本对齐。 */
+const loopUser = {role: 'user', content: '读取 README.md，然后用一句话总结。'};
+const loopCall = {role: 'assistant', content: '我先读取文件。', toolCalls: [{id: 'c1', name: 'read', arguments: {path: 'README.md'}}]};
+const loopResult = {role: 'toolResult', toolCallId: 'c1', content: '这是一个使用 TypeScript 编写的命令行 Agent。'};
+const loopAnswer = {role: 'assistant', content: 'README 介绍了一个 TypeScript 命令行 Agent 项目。'};
+const beforeRead = [loopUser, loopCall];
+const afterRead = [loopUser, loopCall, loopResult];
 export const lessonGuides = {
     F01: {
+        reasoning: {
+            problem: '只调用一次 llm.chat，会停在“我需要读文件”。收到 read 请求时，磁盘还没被读取，模型也还不知道文件内容。',
+            change: '保留同一个 messages 数组：收到工具调用就本地执行、追加结果，再带着新历史请求模型；没有工具调用才返回。',
+            why: '模型的上下文来自请求。执行 read 只改变了本地程序知道的信息，必须把结果再发过去，模型才能根据文件做总结。',
+            cost: '这条路径有两次模型请求；第一轮决定动作，第二轮根据结果作答。复杂任务可以有更多轮，并不是固定循环两次。',
+            next: '这一版尚无轮数上限，工具执行异常也会直接抛出。接下来先在 F02 看清数据契约，再沿 F06 的错误回传、F08 的预算与策略理解边界。',
+            question: '如果 read 已完成，却没有把 toolResult 追加进 messages，第二次请求缺少什么？',
+            answer: '缺少文件内容。模型只能看见原问题和自己提出的 read 调用，不能从这段历史知道本地读取结果；真实接口还可能拒绝缺少配对结果的请求。',
+        },
+        walkthrough: {
+            nodes: [{id: 'model', title: 'LLM', note: '决定下一步'}, {id: 'loop', title: 'Agent 循环', note: '本地组织交互'}, {id: 'tool', title: 'read 工具', note: '本地访问文件'}],
+            steps: [
+                {title: '先把输入变成消息', activeNode: 'loop', flight: '',
+                    explanation: 'prompt 收到字符串，创建本次运行的 messages，并追加一条 user。模型此时还没有被调用。',
+                    code: 'const messages: AgentMessage[] = [];\nmessages.push({ role: "user", content: text });',
+                    messages: [loopUser], requestMessages: [], modelCalls: 0, toolExecutions: 0},
+                {title: '第一次请求：让模型决定下一步', activeNode: 'model', flight: 'request',
+                    explanation: 'Agent 在 await 这里等待模型。传过去的消息只有用户问题；本地有 read 工具，不代表模型已经读到了文件。',
+                    code: 'const reply = await this.llm.chat(messages);',
+                    messages: [loopUser], requestMessages: [loopUser], modelCalls: 1, toolExecutions: 0},
+                {title: '收到的是动作请求，不是动作结果', activeNode: 'loop', flight: 'reply',
+                    explanation: '把完整 assistant 追加到历史。toolCalls 里的 c1 标识这次 read 请求，arguments.path 才是交给工具的参数。',
+                    code: 'messages.push(reply);\nif (!reply.toolCalls?.length) { /* 没有调用才返回 */ }',
+                    messages: beforeRead, requestMessages: [loopUser], modelCalls: 1, toolExecutions: 0},
+                {title: '真正读文件的是本地工具', activeNode: 'tool', flight: 'execute',
+                    explanation: '按 name 找到 read，再 await execute。工具返回文件文本，暂存在 result；此时 messages 里仍没有文件内容。',
+                    code: 'const tool = this.tools.find((i) => i.name == toolCall.name);\nconst result = await tool.execute(toolCall.arguments);',
+                    localValue: loopResult.content,
+                    messages: beforeRead, requestMessages: [loopUser], modelCalls: 1, toolExecutions: 1},
+                {title: '把观察结果补回历史', activeNode: 'loop', flight: 'result',
+                    explanation: '追加 toolResult，并用 toolCallId: c1 对应之前的调用。工具只返回结果；组织消息和决定继续的是 Agent。',
+                    code: 'messages.push({\n  role: "toolResult", content: result, toolCallId: toolCall.id\n});',
+                    messages: afterRead, requestMessages: [loopUser], modelCalls: 1, toolExecutions: 1},
+                {title: '第二次请求：模型终于看到文件', activeNode: 'model', flight: 'request',
+                    explanation: '回到同一个 while，再调用同一行 chat。不同的是 messages 从 1 条变成 3 条：这次请求才带上读取结果，不需要再追加一个 user。',
+                    code: 'const reply = await this.llm.chat(messages);',
+                    messages: afterRead, requestMessages: afterRead, modelCalls: 2, toolExecutions: 1},
+                {title: '没有新工具调用，才完成本次 prompt', activeNode: 'loop', flight: 'reply',
+                    explanation: '第二个 assistant 是总结文本，没有 toolCalls。先追加回答，再打印并返回全部 messages；本次共请求模型 2 次、执行 read 1 次。',
+                    code: 'messages.push(reply);\nif (!reply.toolCalls?.length) {\n  console.log(reply.content);\n  return messages;\n}',
+                    messages: [...afterRead, loopAnswer], requestMessages: afterRead, modelCalls: 2, toolExecutions: 1},
+            ],
+        },
         input: '读取 README.md，然后用一句话总结。',
         trace: ['第一轮提出 read 调用', '本地读取并追加结果', '第二轮根据内容作答'],
         outcome: '同一次 prompt 经历两次模型请求；没有新的工具调用才返回。',
@@ -171,6 +220,22 @@ export const lessonGuides = {
         takeaway: 'Tool 专注动作，执行器负责动作周围的规则。',
     },
     '06': {
+        diagram: {
+            kind: 'registration', title: '同一条保存链，发生在两个时刻',
+            lanes: [
+                {title: 'A · 运行前：把接收者接好', description: '装配一次，不是在这里写入新消息。', steps: [
+                    {label: 'createSessionAgent(store, options)', detail: '读取历史，创建 Agent。'},
+                    {label: 'createSessionEventListener(store)', detail: '返回一个记住 store 的 async 回调。'},
+                    {label: 'agent.subscribe(listener)', detail: '把回调加入 EventBus 的监听器集合。'}]},
+                {title: 'B · 运行时：通知并等待返回', description: '每条完整消息沿这条链走一次；partial 不走保存分支。', steps: [
+                    {label: 'Loop：追加完整消息', detail: '内存 messages 先变化，再 await emit(message_end)。'},
+                    {label: 'Agent.handleEvent', detail: '先更新实时 State，再等待 EventBus.emit。'},
+                    {label: 'EventBus → 已注册 listener', detail: '按照注册顺序逐个 await，不是后台并行。'},
+                    {label: 'listener → store.appendMessage', detail: '只有 message_end 才等待写入 JSONL。'},
+                    {label: '写入完成 → 逐层返回 Loop', detail: '全部监听器结束，当前执行链才能继续。'}]},
+            ],
+            note: 'A 是先接线，B 是后运行，不是两条并行线程。写盘失败会沿 await 链抛回；Loop 已追加的内存消息没有整体事务回滚。因此“await 保存”不等于内存和磁盘永远一致。',
+        },
         input: 'assistant 的“你好”已经生成完整，怎样自动存起来？',
         trace: ['Loop 追加完整消息', '发出 message_end', 'Session 监听器等待写盘完成'],
         outcome: 'Agent 不引用 JSONL 实现，也能让恢复会话需要的消息可靠地按序追加。',
@@ -201,6 +266,21 @@ export const lessonGuides = {
         takeaway: '验收盯住用户可观察的结果，不等于再加一个运行模块。',
     },
     '09': {
+        diagram: {
+            kind: 'history-projection', title: '压缩的是下次请求，不是磁盘原文',
+            lanes: [
+                {title: 'JSONL · 持久化原始记录', description: '压缩之后，旧五组仍在，再追加一条摘要记录。', steps: [
+                    {label: '分组 1 / 2 / 3', detail: '成为摘要 S 的来源；原记录仍保留。'},
+                    {label: '分组 4 · user 的 Entry ID = u4', detail: '保留边界；包含该 user 后完整的 assistant / 工具交互。'},
+                    {label: '分组 5', detail: '整个近期分组仍保留，工具调用和结果不拆开。'},
+                    {label: '新增 compaction', detail: 'summary: S；firstKeptEntryId: u4。记录摘要和保留起点。'}]},
+                {title: 'Agent.messages · 有效上下文', description: 'buildAgentContext 从记录投影；模型请求使用这个视图。', steps: [
+                    {label: '历史摘要 S', detail: '将分组 1 / 2 / 3 的关键背景压缩成文本；不是新的用户命令。'},
+                    {label: '完整分组 4', detail: '从 u4 开始保留近期原消息。'},
+                    {label: '完整分组 5', detail: '继续携带最近任务的原始细节。'}]},
+            ],
+            note: '顺序：生成 S → await appendCompaction → replaceMessages。只有保存成功才应用新上下文；摘要是有损的，默认保留两组只是本阶段策略，不保证任意长的单组都能放进模型窗口。',
+        },
         input: '已有 5 个 user 分组，执行 /compact，保留最近 2 组。',
         trace: ['旧 3 组生成摘要 S', '追加 compaction 记录', '有效上下文替换为 S + 最近 2 组'],
         outcome: '下次请求更短，但 JSONL 仍保留原始的 5 组消息。',
