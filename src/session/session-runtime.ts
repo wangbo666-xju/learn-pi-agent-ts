@@ -1,3 +1,6 @@
+import type {MemoryWorkspace} from "../memory/memory-workspace.ts";
+import type {MemoryToolSet} from "../memory/memory-tools.ts";
+import {buildMemoryContext} from "../memory/memory-context.ts";
 import type Agent from "../agent.ts";
 import type {AgentOptions} from "../agent.ts";
 import type {AgentRunResult} from "../agent-loop.ts";
@@ -16,6 +19,12 @@ export type CompactionEvent = {
 };
 
 export type SessionRuntimeOptions = Omit<AgentOptions, "initialMessages"> & {
+    /** 可选的项目记忆依赖；不配置时保持原来的行为。 */
+    memory?: {
+        workspace: MemoryWorkspace;
+        tools: MemoryToolSet;
+        onWarning?: (message: string) => void;
+    };
     autoCompact?: AutoCompactOptions;
     onCompaction?: (event: CompactionEvent) => void;
 };
@@ -34,6 +43,8 @@ export class SessionRuntime {
     private active?: Promise<unknown>;
     private idle: Promise<void> = Promise.resolve();
     private compacting = false;
+    private readonly memory?: SessionRuntimeOptions["memory"];
+    private readonly baseSystemPrompt: string;
 
     constructor(agent: Agent, store: SessionStore, options: SessionRuntimeOptions) {
         this.agent = agent;
@@ -42,15 +53,28 @@ export class SessionRuntime {
         if (options.autoCompact) validateAutoCompact(options.autoCompact);
         this.limits = options.autoCompact ? {...options.autoCompact} : undefined;
         this.onCompaction = options.onCompaction;
+        this.memory = options.memory;
+        // 保存不含动态 Memory 的基础提示词，避免每次运行重复追加。
+        this.baseSystemPrompt = options.systemPrompt ?? "";
     }
 
-    get state() { return this.agent.state; }
-    get isCompacting(): boolean { return this.compacting; }
-    subscribe(listener: AgentEventListener): () => void { return this.agent.subscribe(listener); }
+    get state() {
+        return this.agent.state;
+    }
+
+    get isCompacting(): boolean {
+        return this.compacting;
+    }
+
+    subscribe(listener: AgentEventListener): () => void {
+        return this.agent.subscribe(listener);
+    }
+
     steer(message: UserMessage): void {
         if (this.compacting) throw new Error("正在压缩，请等待完成后再加入指令");
         this.agent.steer(message);
     }
+
     followUp(message: UserMessage): void {
         if (this.compacting) throw new Error("正在压缩，请等待完成后再加入指令");
         this.agent.followUp(message);
@@ -81,7 +105,9 @@ export class SessionRuntime {
             try {
                 return await compactSession(this.agent, this.store, this.llm,
                     signal ? AbortSignal.any([signal, ownSignal]) : ownSignal);
-            } finally { this.compacting = false; }
+            } finally {
+                this.compacting = false;
+            }
         });
     }
 
@@ -107,6 +133,8 @@ export class SessionRuntime {
         let result: AgentRunResult | undefined;
         try {
             signal.throwIfAborted();
+            await this.refreshMemoryContext(signal);
+            signal.throwIfAborted();
             await this.checkThreshold(signal);
             signal.throwIfAborted();
             try {
@@ -129,7 +157,33 @@ export class SessionRuntime {
                 return {newMessages, finalMessage: result?.finalMessage, reason: "aborted"};
             }
             throw error;
-        } finally { unsubscribe(); }
+        } finally {
+            unsubscribe();
+        }
+    }
+
+    /** 只做运行前加载；不生成记忆，不启动第二个 Agent。 */
+    private async refreshMemoryContext(signal: AbortSignal): Promise<void> {
+        if (!this.memory) return;
+        this.memory.tools.clearReads();
+        let index = "";
+        let unavailable = false;
+        try {
+            index = await this.memory.workspace.readIndex(signal);
+        } catch (error) {
+            signal.throwIfAborted(); // 用户取消不能被降级成普通读取警告。
+            unavailable = true;
+            const message = error instanceof Error ? error.message : String(error);
+            try {
+                this.memory.onWarning?.("记忆索引加载失败：" + message);
+            } catch { /* 展示失败不影响主任务。 */
+            }
+        }
+        signal.throwIfAborted();
+        this.agent.state.systemPrompt = [
+            this.baseSystemPrompt,
+            buildMemoryContext(this.memory.workspace.root, index, unavailable),
+        ].filter(Boolean).join("\n\n");
     }
 
     private async checkThreshold(signal: AbortSignal): Promise<void> {
@@ -139,8 +193,11 @@ export class SessionRuntime {
         signal.throwIfAborted();
         if (tokens === undefined || tokens <= this.limits.contextWindowTokens - this.limits.reserveTokens) return;
         // 阈值压缩属于维护：失败不抹掉已完成的回答，事件报告失败；溢出路径则必须成功才重试。
-        try { await this.autoCompact("threshold", signal); }
-        catch (error) { if (signal.aborted) throw error; }
+        try {
+            await this.autoCompact("threshold", signal);
+        } catch (error) {
+            if (signal.aborted) throw error;
+        }
     }
 
     private async autoCompact(reason: CompactionEvent["reason"], signal: AbortSignal): Promise<boolean> {
@@ -159,7 +216,11 @@ export class SessionRuntime {
             throw error;
         } finally {
             this.compacting = false;
-            if (started || errorMessage) this.onCompaction?.({type: "auto_compaction_end", reason, error: errorMessage});
+            if (started || errorMessage) this.onCompaction?.({
+                type: "auto_compaction_end",
+                reason,
+                error: errorMessage
+            });
         }
     }
 }

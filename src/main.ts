@@ -1,3 +1,5 @@
+import {createMemoryWorkspace} from "./memory/memory-workspace.ts";
+import {createMemoryFileTools} from "./memory/memory-tools.ts";
 import {createInterface} from "node:readline";
 import {stdin, stdout} from "node:process";
 import {dirname, resolve} from "node:path";
@@ -19,6 +21,13 @@ import {formatSkillsForSystemPrompt} from "./skills/system-prompt.ts";
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const sessionManager = new SessionManager(resolve(projectRoot, "sessions"));
+// 只有开启才创建目录；同一项目的各个 Session 共用这个 Workspace。
+const memoryWorkspace = process.env.AGENT_MEMORY_ENABLED === "1"
+    ? await createMemoryWorkspace({
+        workspaceRoot: projectRoot,
+        dataRoot: process.env.AGENT_MEMORY_DATA_ROOT,
+    })
+    : undefined;
 const skills = await loadSkills(resolve(projectRoot, "skills"));
 const systemPrompt = [
     "你是一个可调用文件工具的编程助手。遇到策略禁止时应说明原因，不尝试绕过限制。",
@@ -34,13 +43,21 @@ const policy = createToolPolicy(async (toolCall) => {
 async function createRuntime(store: SessionStore) {
     // 普通对话和摘要复用同一个模型适配器；压缩不走 Agent 的工具循环。
     const llm = new RealLlmClient();
+    // 工具集属于会话，已读集合不能在两个 Runtime 之间共享。
+    const memoryTools = memoryWorkspace
+        ? createMemoryFileTools({workspace: memoryWorkspace}) : undefined;
     const agent = await createSessionRuntime(store, {
         llm,
-        tools: [
+        tools: memoryTools?.tools ?? [
             new ReadFileTool(projectRoot),
             new WriteFileTool(projectRoot),
             new ListDirTool(projectRoot),
         ],
+        memory: memoryWorkspace && memoryTools ? {
+            workspace: memoryWorkspace,
+            tools: memoryTools,
+            onWarning: (message) => write("\n" + message + "\n"),
+        } : undefined,
         beforeToolCall: policy,
         systemPrompt,
         // 应用预算，不是自动识别的模型上限；切模型时按实际窗口调整环境变量。

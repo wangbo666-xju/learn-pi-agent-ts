@@ -4,10 +4,12 @@ import type {
     ToolCall,
 } from "./types.ts";
 
+// 外部注入审批行为；这里不决定使用弹窗、终端询问还是直接放行。
 export type RequestToolApproval = (
     toolCall: ToolCall,
 ) => Promise<boolean>;
 
+// 返回 beforeToolCall 钩子，由 executeTools 在工具执行前调用。
 export function createToolPolicy(
     requestApproval: RequestToolApproval,
 ): BeforeToolCall {
@@ -20,14 +22,15 @@ export function createToolPolicy(
             return undefined;
         }
 
-        // 目前只有 write 是修改型工具
-        if (toolCall.name === "write") {
+        // write 和受限的 Memory deleteFile 都需要通过修改策略。
+        // 审批只是入口规则；deleteFile 的具体路径限制仍由 Memory 工具强制执行。
+        if (toolCall.name === "write" || toolCall.name === "deleteFile") {
             const path = toolCall.arguments.path;
 
             if (typeof path !== "string") {
                 return {
                     block: true,
-                    reason: "write 工具缺少 path 参数",
+                    reason: toolCall.name + " 工具缺少 path 参数",
                 };
             }
 
@@ -52,6 +55,7 @@ export function createToolPolicy(
             return undefined;
         }
 
+        // 未知工具默认拒绝；不会因为模型写了一个工具名就获得新权限。
         return {
             block: true,
             reason: `未配置工具策略：${toolCall.name}`,

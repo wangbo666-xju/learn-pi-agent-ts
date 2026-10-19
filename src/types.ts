@@ -2,6 +2,8 @@
 export type UserMessage = {
     role: "user";
     content: string;
+    /** 应用记录 Skill 来源；提取记忆时只采用用户附加要求，不采用 Skill 正文。 */
+    source?: { kind: "skill"; name: string; additionalInstructions?: string };
 };
 
 export type AssistantMessage = {
@@ -42,6 +44,7 @@ export type AgentMessage = UserMessage | AssistantMessage | ToolResultMessage;
 //------------------------llm
 export interface LlmClient {
     getUsageContextKey?(tools: Tool[], options?: LlmRequestOptions): string;
+
     chat(
         messages: AgentMessage[],
         tools: Tool[],
